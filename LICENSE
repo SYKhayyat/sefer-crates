@@ -1,0 +1,37 @@
+sefer-crates is dual-licensed under either of
+
+  * Apache License, Version 2.0 ...... LICENSE-APACHE  (or http://www.apache.org/licenses/LICENSE-2.0)
+  * MIT license ...................... LICENSE-MIT     (or http://opensource.org/licenses/MIT)
+
+at your option.
+
+This is the Rust ecosystem's convention: the MIT licence is short and
+maximally permissive, and Apache-2.0 adds an explicit patent grant that some
+organisations require before they will use or contribute to a project. You may
+comply with either one; you do not have to comply with both.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in sefer-crates by you shall be dual-licensed as above, without
+any additional terms or conditions.
+
+
+WHY THIS LICENCE AND NOT ANOTHER
+--------------------------------
+
+These crates are compiled into both Girsa and Ksav. Ksav is MIT OR Apache-2.0,
+so this repository has to be too — a copyleft dependency here would relicense
+both applications through the shared code.
+
+That is not an abstract concern. Three projects in this problem space are
+directly relevant prior art and all three are copyleft:
+
+  * Zayit .................... AGPL-3.0 with a Section 7b additional term
+  * HebMorph ................. AGPL
+  * Sefaria-ElasticSearch .... GPL-3.0
+
+They may be read to understand the problem. No code, table, word list or data
+file from any of them may be copied into this repository, in whole or in part.
+Behaviour described in prose may be reimplemented from scratch; a prefix table
+lifted verbatim is a licence violation regardless of how small it is.
+
+Otzaria is UNLICENSE (public domain) and is safe to draw from.

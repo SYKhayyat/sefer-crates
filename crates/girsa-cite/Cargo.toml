@@ -1,0 +1,21 @@
+[package]
+name = "girsa-cite"
+description = "Citation formatting — one implementation, compiled into both Girsa and Ksav"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+girsa-ref.workspace = true
+girsa-hebrew.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde", "girsa-ref/serde"]
+
+[lints]
+workspace = true

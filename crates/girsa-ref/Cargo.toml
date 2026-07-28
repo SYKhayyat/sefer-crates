@@ -1,0 +1,24 @@
+[package]
+name = "girsa-ref"
+description = "Canonical refs, citation parsing, offline resolution, and the redirect table"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true, optional = true }
+thiserror.workspace = true
+girsa-hebrew.workspace = true
+
+[features]
+default = ["serde"]
+serde = ["dep:serde", "girsa-hebrew/serde"]
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

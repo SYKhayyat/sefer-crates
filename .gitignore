@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Fixtures generated from a local corpus checkout. The generator is committed;
+# its multi-megabyte output is not.
+/fixtures/generated/

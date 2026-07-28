@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The shared crates on their own.
+  crates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --all-targets
+      - run: cargo test
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo fmt -- --check
+
+  # The job that pays for the three-repository split.
+  #
+  # Girsa and Ksav each pin an exact version of these crates, so a breaking
+  # change here cannot be caught by either app's own CI until someone bumps the
+  # pin — which could be weeks. This job builds both dependents against the
+  # proposed change, so the break surfaces in *this* repository's pull request.
+  #
+  # It runs the same script a developer runs locally
+  # (`tools/check-dependents.sh`), so CI and the desk cannot disagree about what
+  # "the dependents build" means.
+  dependents:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sefer-crates
+
+      - uses: actions/checkout@v4
+        with:
+          repository: SYKhayyat/girsa
+          path: Girsa
+
+      - uses: actions/checkout@v4
+        with:
+          repository: SYKhayyat/ksav
+          path: Ksav
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # The dependents resolve `path = "../sefer-crates/crates/..."`, so the
+      # three checkouts must sit side by side exactly as they do on a desk.
+      - name: Build and test every dependent against this tree
+        run: bash sefer-crates/tools/check-dependents.sh
