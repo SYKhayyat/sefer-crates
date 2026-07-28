@@ -107,6 +107,26 @@ impl Ref {
     pub fn is_span(&self) -> bool {
         self.to.is_some()
     }
+
+    /// Whether this ref survives being written down and read back.
+    ///
+    /// The grammar has three separators and **no escape**, so a work component
+    /// or an address level containing one of them cannot be written. A level of
+    /// `1-2` prints as the range from 1 to 2; a level of `a:b` prints as two
+    /// levels. Both come back as a different place, and neither errors.
+    ///
+    /// A caller building a ref out of text it did not choose — a section name
+    /// from a schema, a heading out of a file — has to be able to find that out
+    /// **before** the ref is stored, because a ref inside a Ksav document is
+    /// read back long after anyone could say what it was meant to be. This is
+    /// the counterpart of Girsa's `SegmentId::is_well_formed`, which the
+    /// importer asserts on every id it mints, and it is defined as the property
+    /// itself rather than as a list of characters so it cannot drift away from
+    /// what the parser actually does.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        self.to_string().parse::<Self>().as_ref() == Ok(self)
+    }
 }
 
 impl fmt::Display for Ref {
@@ -155,24 +175,50 @@ impl FromStr for Ref {
     }
 }
 
-/// `2a:1-2b:4` → two addresses; `1:1` → one.
+/// `2a:1-2b:4` → two addresses; `1:1` → one; `orach-chayim:240:1` → one.
 ///
-/// A hyphen inside a *level* would be ambiguous, but no address level in the
-/// corpus contains one — dafim, simanim and se'ifim are numbers or a number
-/// and a letter.
+/// # The hyphen is the only genuinely ambiguous character in the grammar
+///
+/// It separates the two ends of a span, and it is also an ordinary character
+/// inside a level. Sefaria names sections `כסלו-טבת` and
+/// `שער חמישי - שער ייחוד המעשה`; slugs are written with it throughout
+/// (spec.md §4.2). Split unconditionally, `girsa:tur/orach-chayim:240:1` reads
+/// back as a range from `orach` to `chayim:240:1` — a place-shaped thing that
+/// is not a place, and nothing errors.
+///
+/// So: **a hyphen separates two addresses only when both sides are addressed by
+/// number.** A daf, a siman, a se'if, a perek. One named level on either side
+/// and the hyphen belongs to the name. [`crate::resolve`] applies the same rule
+/// to a citation, so what the resolver produces is what this gives back.
+///
+/// At most one hyphen in a tail can ever satisfy that, so there is no choice to
+/// make and no ambiguity left to surface: a level is delimited by `:`, so a
+/// hyphen kept *inside* a level makes that level named, and a side holding it
+/// can never be all-numbered. `1-2-3` therefore has no valid split rather than
+/// two, and is one named level.
 fn parse_range(tail: &str) -> Option<(Address, Option<Address>)> {
-    match tail.split_once('-') {
-        Some((from, to)) => {
-            let from = Address::parse(from)?;
-            let to = Address::parse(to)?;
-            if from == to {
-                Some((from, None))
-            } else {
-                Some((from, Some(to)))
-            }
-        }
-        None => Some((Address::parse(tail)?, None)),
+    for (at, _) in tail.match_indices('-') {
+        let (from, to) = tail.split_at(at);
+        let (Some(from), Some(to)) = (numbered_address(from), numbered_address(&to[1..])) else {
+            continue;
+        };
+        return Some(if from == to {
+            (from, None)
+        } else {
+            (from, Some(to))
+        });
     }
+    Some((Address::parse(tail)?, None))
+}
+
+/// An address every level of which is a number or a daf, or nothing.
+fn numbered_address(raw: &str) -> Option<Address> {
+    let address = Address::parse(raw)?;
+    address
+        .levels()
+        .iter()
+        .all(crate::address::Level::is_numbered)
+        .then_some(address)
 }
 
 #[cfg(test)]

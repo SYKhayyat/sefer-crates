@@ -24,7 +24,7 @@ crates exist to prevent in the first place.
 
 Three things pay it, and none of them are optional:
 
-1. **Exact version pins.** Both apps depend on `=0.1.0`, not `^0.1`. Taking a
+1. **Exact version pins.** Both apps depend on `=0.2.0`, not `^0.2`. Taking a
    new version is a deliberate act on each side.
 2. **CI here builds both dependents.** `tools/check-dependents.sh`, run by
    `.github/workflows/ci.yml`, builds and tests Girsa and Ksav against the
@@ -32,6 +32,32 @@ Three things pay it, and none of them are optional:
    rather than weeks later inside an app.
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
+
+## 0.2.0 — the hyphen
+
+`girsa-ref` read a hyphen anywhere in an address as the separator between the
+two ends of a span. Section names contain hyphens: Sefaria really does call one
+`כסלו-טבת` and another `שער חמישי - שער ייחוד המעשה`. So
+`girsa:tur/orach-chayim:240:1` read back as a **range from `orach` to
+`chayim:240:1`** — a place-shaped thing that is not a place, resolving without
+an error to somewhere nobody asked for.
+
+Girsa found this in W8 and worked around it on its own side, by never writing a
+hyphen into an id. That left the misreading here, waiting for the next caller.
+Fixed at the source instead:
+
+- **A hyphen separates two addresses only when both sides are addressed by
+  number** — a daf, a siman, a se'if, a perek. One named level on either side
+  and the hyphen belongs to the name. `2a:1-2b:4` is still a span.
+- `resolve` applies the same rule, so it cannot hand back a ref the parser will
+  read differently.
+- **`Ref::is_well_formed`** — whether a ref survives being written down and read
+  back. The grammar has three separators and no escape, so a caller building a
+  ref out of text it did not choose (a schema's section name, a heading from a
+  file) can find out *before* the ref is stored in a document.
+
+The version is a coordinated bump: every crate here moves to 0.2.0 together and
+both apps take the new pin in the same change.
 
 ## Develop
 

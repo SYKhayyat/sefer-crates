@@ -153,6 +153,32 @@ fn no_citation_resolves_to_a_work_that_is_not_in_the_lexicon() {
 }
 
 #[test]
+fn every_ref_the_resolver_produces_can_be_written_down_and_read_back() {
+    // The sibling check for the hyphen hazard, run over the whole harvested
+    // corpus rather than over cases chosen to pass.
+    //
+    // A resolved ref does not stay in memory: it is written into a Ksav
+    // document, a patch file, a link row. If the text of a ref reads back as a
+    // *different* ref, the citation silently changes meaning the next time the
+    // document is opened — and a hyphen in a section name did exactly that.
+    // Whatever comes out of the resolver has to survive the round trip.
+    let lexicon = lexicon();
+    let mut checked = 0usize;
+    for (_, citation) in citations() {
+        for r in resolve(&lexicon, citation).candidates() {
+            checked += 1;
+            let printed = r.to_string();
+            assert!(
+                r.is_well_formed(),
+                "{citation} resolved to {printed}, which reads back as {:?}",
+                printed.parse::<girsa_ref::Ref>()
+            );
+        }
+    }
+    println!("{checked} refs, every one of them writable");
+}
+
+#[test]
 fn the_citations_the_spec_names_land_where_it_says() {
     // Hand-checkable, unlike the rate above. Every one of these appears in
     // spec.md §4.3 as something the resolver must handle.

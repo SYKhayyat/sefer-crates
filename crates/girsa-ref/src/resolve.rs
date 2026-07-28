@@ -172,20 +172,41 @@ pub fn resolve_in_context(lexicon: &Lexicon, citation: &str, context: &Context) 
 /// range (spec.md §4.2), so a resolver that only reads points cannot express
 /// half of what it is handed.
 fn parse_span(rest: &str) -> Option<(Address, Option<Address>)> {
-    // A hyphen is a range separator *only if both sides are addresses*. It is
-    // also an ordinary character in a section name — `שער חמישי - שער ייחוד
-    // המעשה`, `כסלו-טבת` — and splitting those tears a name in half and loses
-    // the citation. Try the range reading, and fall back rather than fail.
-    if let Some((from, to)) = rest.split_once('-') {
-        if let (Some(from), Some(to)) = (parse_address(from), parse_address(to)) {
-            return Some(if from == to {
-                (from, None)
-            } else {
-                (from, Some(to))
-            });
-        }
+    // A hyphen is a range separator *only if both sides are addressed by
+    // number*. It is also an ordinary character in a section name —
+    // `שער חמישי - שער ייחוד המעשה`, `כסלו-טבת` — and splitting those tears a
+    // name in half and loses the citation. Try the range reading, and fall back
+    // rather than fail.
+    //
+    // "By number" and not merely "reads as an address", because this function
+    // decides what the ref it hands back will *look like*, and a ref is stored
+    // as text. `Part 2-Part 3` reads as two addresses, but the ref built from
+    // it prints as `girsa:w/Part:2-Part:3`, and that string read back is one
+    // address with a level called `2-Part`. The rule here is
+    // [`crate::reference`]'s rule, so that what the resolver produces is
+    // something the parser will give back unchanged.
+    for (at, _) in rest.match_indices('-') {
+        let (from, to) = rest.split_at(at);
+        let (Some(from), Some(to)) = (numbered_address(from), numbered_address(&to[1..])) else {
+            continue;
+        };
+        return Some(if from == to {
+            (from, None)
+        } else {
+            (from, Some(to))
+        });
     }
     Some((parse_address(rest)?, None))
+}
+
+/// An address read from a citation, every level of which is a number or a daf.
+fn numbered_address(rest: &str) -> Option<Address> {
+    let address = parse_address(rest)?;
+    address
+        .levels()
+        .iter()
+        .all(Level::is_numbered)
+        .then_some(address)
 }
 
 /// Words that name a division rather than being part of the address.
@@ -551,6 +572,38 @@ mod tests {
         // Every Hebrew word is a number if you insist. `ברכות שבת` would be
         // Berakhot siman 702 to a resolver that summed whatever it was given.
         assert_eq!(resolved("ברכות שבת"), "UNRESOLVED");
+    }
+
+    #[test]
+    fn the_resolver_never_hands_back_a_ref_it_cannot_write_down() {
+        // A resolved ref is stored as text — in a Ksav document, in a link row.
+        // If the text reads back as a *different* ref, the citation changes
+        // meaning the next time it is opened, and nothing errors.
+        //
+        // `Part 2` is a real Sefaria node name, so a citation can genuinely put
+        // a named level on both sides of a hyphen. Read as a range, the ref
+        // printed `girsa:bavli/berakhot/Part:2-Part:3`, and *that* string is one
+        // address with a level called `2-Part`. Two readings of one hyphen, in
+        // two functions of one crate.
+        let r = resolve(&lexicon(), "ברכות Part 2-Part 3");
+        for candidate in r.candidates() {
+            assert!(
+                candidate.is_well_formed(),
+                "{candidate} reads back as {:?}",
+                candidate.to_string().parse::<Ref>()
+            );
+        }
+        assert!(!r.candidates().is_empty(), "the citation still resolves");
+    }
+
+    #[test]
+    fn a_hyphenated_section_name_is_not_torn_in_half() {
+        // `כסלו-טבת` is one section of one sefer. Split on the hyphen it is two
+        // words, neither of which is an address, and the citation is lost.
+        assert_eq!(
+            resolved("ברכות כסלו-טבת 5"),
+            "girsa:bavli/berakhot/כסלו-טבת:5"
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "girsa-cite"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "girsa-hebrew",
  "girsa-ref",
@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "girsa-hebrew"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "girsa-ref"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "girsa-hebrew",
  "serde",
@@ -31,7 +31,7 @@ dependencies = [
 
 [[package]]
 name = "girsa-source"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "girsa-ref",
  "serde",

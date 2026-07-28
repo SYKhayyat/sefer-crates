@@ -51,6 +51,17 @@ impl Level {
         self.0.parse().ok()
     }
 
+    /// Whether this level is addressed by number — a siman, a se'if, a perek, a
+    /// daf — rather than named.
+    ///
+    /// This is what tells a hyphen apart from a hyphen. `2a:1-2b:4` is a range
+    /// because both ends are numbered; `כסלו-טבת` is one named level because
+    /// neither end is. See [`crate::reference`].
+    #[must_use]
+    pub fn is_numbered(&self) -> bool {
+        self.as_number().is_some() || crate::daf::parse(&self.0).is_some()
+    }
+
     /// The canonical text.
     #[must_use]
     pub fn as_str(&self) -> &str {
