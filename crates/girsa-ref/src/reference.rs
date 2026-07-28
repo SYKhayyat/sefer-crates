@@ -186,20 +186,34 @@ impl FromStr for Ref {
 /// back as a range from `orach` to `chayim:240:1` — a place-shaped thing that
 /// is not a place, and nothing errors.
 ///
-/// So: **a hyphen separates two addresses only when both sides are addressed by
-/// number.** A daf, a siman, a se'if, a perek. One named level on either side
-/// and the hyphen belongs to the name. [`crate::resolve`] applies the same rule
-/// to a citation, so what the resolver produces is what this gives back.
+/// So: **a hyphen separates two addresses only when the side after it is
+/// addressed entirely by number** — a daf, a siman, a se'if, a perek — and the
+/// side before it reads as an address at all. [`crate::resolve`] applies the
+/// same rule to a citation, so what the resolver produces is what this gives
+/// back.
 ///
-/// At most one hyphen in a tail can ever satisfy that, so there is no choice to
-/// make and no ambiguity left to surface: a level is delimited by `:`, so a
-/// hyphen kept *inside* a level makes that level named, and a side holding it
-/// can never be all-numbered. `1-2-3` therefore has no valid split rather than
-/// two, and is one named level.
+/// # Why the two sides are not treated alike
+///
+/// Requiring both to be numbered was the first rule here, and the corpus said
+/// no: `Abarbanel on Torah, Exodus 27:20:1-14` is comments 1 to 14 on one
+/// pasuk, and `Exodus` is a **named level** of that work, because a commentary
+/// on Chumash is divided by book before it is divided by anything numbered.
+/// 11,806 distinct citations in Sefaria's link files are shaped that way. The
+/// end of a span is what has to be unmistakable, and it always is: the closing
+/// end of a real range is written short and numeric (`…1-14`, `33b:21-22`),
+/// while the second half of a name never is (`orach-**chayim:240:1**`,
+/// `כסלו-**טבת**`).
+///
+/// At most one hyphen in a tail can satisfy this, so there is no choice to make
+/// and no ambiguity left to surface. A level is delimited by `:`, so a hyphen
+/// kept *inside* a level makes that level named; if the hyphen at `i` qualifies,
+/// every earlier hyphen has `i`'s hyphen sitting inside one of its right-hand
+/// levels, and so cannot. `Ki-Tisa:1-3` splits at the second hyphen and only
+/// there.
 fn parse_range(tail: &str) -> Option<(Address, Option<Address>)> {
     for (at, _) in tail.match_indices('-') {
         let (from, to) = tail.split_at(at);
-        let (Some(from), Some(to)) = (numbered_address(from), numbered_address(&to[1..])) else {
+        let (Some(from), Some(to)) = (Address::parse(from), numbered_address(&to[1..])) else {
             continue;
         };
         return Some(if from == to {

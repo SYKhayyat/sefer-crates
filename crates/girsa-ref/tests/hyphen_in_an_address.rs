@@ -98,6 +98,36 @@ fn a_range_between_two_numbered_addresses_is_still_a_range() {
 }
 
 #[test]
+fn a_span_that_opens_on_a_named_level_is_still_a_span() {
+    // The corpus taught this one. `Abarbanel on Torah, Exodus 27:20:1-14` is
+    // comments 1 to 14 on one pasuk — and `Exodus` is a *named* level, because
+    // a commentary on Chumash is divided by book before it is divided by
+    // anything numbered. 11,806 distinct citations in Sefaria's link files open
+    // this way, and a rule requiring both sides of the hyphen to be numbered
+    // refused every one of them.
+    //
+    // The end of a span is what has to be unmistakable, and it always is.
+    let r: Ref = "girsa:abarbanel-on-torah/Exodus:27:20:1-14"
+        .parse()
+        .expect("parses");
+    assert!(r.is_span());
+    assert_eq!(r.from().to_string(), "Exodus:27:20:1");
+    assert_eq!(r.to().map(ToString::to_string).as_deref(), Some("14"));
+    assert!(r.is_well_formed());
+}
+
+#[test]
+fn the_split_is_the_last_hyphen_and_there_is_never_more_than_one_candidate() {
+    // `Ki-Tisa` is a name; `1-3` after it is a range. Only the second hyphen
+    // can qualify: the first one's right-hand side carries the second inside a
+    // level, which makes that level named.
+    let r: Ref = "girsa:torah/Ki-Tisa:1-3".parse().expect("parses");
+    assert_eq!(r.from().to_string(), "Ki-Tisa:1");
+    assert_eq!(r.to().map(ToString::to_string).as_deref(), Some("3"));
+    assert_eq!(r.to_string(), "girsa:torah/Ki-Tisa:1-3");
+}
+
+#[test]
 fn a_span_whose_end_is_written_short_still_reads_as_a_span() {
     // `Arakhin 33b:21-22` — two lines of one daf. The end is completed against
     // the start later, in the index; here it only has to survive parsing.

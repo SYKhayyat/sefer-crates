@@ -46,9 +46,18 @@ Girsa found this in W8 and worked around it on its own side, by never writing a
 hyphen into an id. That left the misreading here, waiting for the next caller.
 Fixed at the source instead:
 
-- **A hyphen separates two addresses only when both sides are addressed by
-  number** — a daf, a siman, a se'if, a perek. One named level on either side
-  and the hyphen belongs to the name. `2a:1-2b:4` is still a span.
+- **A hyphen separates two addresses only when the side after it is addressed
+  entirely by number** — a daf, a siman, a se'if, a perek — and the side before
+  it reads as an address at all. `2a:1-2b:4` is still a span.
+
+  The two sides are deliberately not treated alike, and the corpus is why.
+  Requiring both to be numbered was the first rule, and it refused 11,806
+  distinct citations shaped like `Abarbanel on Torah, Exodus 27:20:1-14` —
+  comments 1 to 14 on one pasuk, opening on a *named* level, because a
+  commentary on Chumash is divided by book before it is divided by anything
+  numbered. The **end** of a span is what has to be unmistakable, and it always
+  is: a closing end is written short and numeric, while the second half of a
+  name never is.
 - `resolve` applies the same rule, so it cannot hand back a ref the parser will
   read differently.
 - **`Ref::is_well_formed`** — whether a ref survives being written down and read

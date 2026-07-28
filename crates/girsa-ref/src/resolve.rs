@@ -172,22 +172,21 @@ pub fn resolve_in_context(lexicon: &Lexicon, citation: &str, context: &Context) 
 /// range (spec.md §4.2), so a resolver that only reads points cannot express
 /// half of what it is handed.
 fn parse_span(rest: &str) -> Option<(Address, Option<Address>)> {
-    // A hyphen is a range separator *only if both sides are addressed by
-    // number*. It is also an ordinary character in a section name —
+    // A hyphen is a range separator *only if the side after it is addressed
+    // entirely by number*. It is also an ordinary character in a section name —
     // `שער חמישי - שער ייחוד המעשה`, `כסלו-טבת` — and splitting those tears a
     // name in half and loses the citation. Try the range reading, and fall back
     // rather than fail.
     //
-    // "By number" and not merely "reads as an address", because this function
-    // decides what the ref it hands back will *look like*, and a ref is stored
-    // as text. `Part 2-Part 3` reads as two addresses, but the ref built from
-    // it prints as `girsa:w/Part:2-Part:3`, and that string read back is one
-    // address with a level called `2-Part`. The rule here is
-    // [`crate::reference`]'s rule, so that what the resolver produces is
-    // something the parser will give back unchanged.
+    // The rule is [`crate::reference`]'s rule, so what this hands back is what
+    // the parser gives back when it is read out of a document again. The
+    // asymmetry is the corpus's: `Abarbanel on Torah, Exodus 27:20:1-14` opens
+    // on a *named* level, because a commentary on Chumash is divided by book
+    // before anything numbered, and 11,806 distinct citations here are shaped
+    // that way. What is never named is the closing end.
     for (at, _) in rest.match_indices('-') {
         let (from, to) = rest.split_at(at);
-        let (Some(from), Some(to)) = (numbered_address(from), numbered_address(&to[1..])) else {
+        let (Some(from), Some(to)) = (parse_address(from), numbered_address(&to[1..])) else {
             continue;
         };
         return Some(if from == to {
