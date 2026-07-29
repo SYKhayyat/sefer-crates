@@ -15,6 +15,7 @@ the class of bug that would destroy trust in the pairing.
 | `girsa-hebrew` | Normalization — nikud, prefixes, ktiv male/chaser, gershayim, abbreviations |
 | `girsa-cite` | Citation formatting — one implementation, both apps |
 | `girsa-post` | The loopback between them: token-gated, localhost only, and the `girsa://` links |
+| `girsa-ksav` | Writing real Ksav markup — the document language, so Girsa's buffer and Ksav agree |
 
 ## The cost of three repositories, and how it is paid
 
@@ -91,6 +92,20 @@ already a URI**. The string a Ksav document has been storing all along is a
 link that lands, which is why the citation in Girsa's HTML clipboard flavour is
 an `<a href="girsa:…">`: paste a quote into Word, print it to PDF, and the mekor
 in the PDF opens the page.
+
+### `girsa-ksav` — the document language
+
+Girsa has a Ksav buffer in it (spec.md §10.3), and *lightweight means the UI,
+not the format*: the buffer writes real Ksav markup from the first keystroke.
+For that to be true, the two applications have to agree about what a quote
+block **is** — and an agreement in prose between two repositories is the thing
+this repository exists to replace. So `#ציטוט[…]`, `#מראה_מקום[…]`,
+`#הערת_עורך[…]` and the escaping are written here, and Ksav's own `source`
+module is a wrapper around them.
+
+The split of labour is exact: this crate asserts that it *wrote* `#ציטוט[…]`;
+only Ksav can assert that **Typst accepts it**, and those tests stay there,
+compiling with the real engine.
 
 ### Two things `girsa-ref` moved
 

@@ -50,6 +50,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "girsa-ksav"
+version = "0.3.0"
+dependencies = [
+ "girsa-source",
+]
+
+[[package]]
 name = "girsa-post"
 version = "0.3.0"
 dependencies = [
