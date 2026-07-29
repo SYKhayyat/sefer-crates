@@ -49,16 +49,33 @@ pub enum CitationPlacement {
 ///
 /// What lands in the buffer is a document, not an import format that has to be
 /// converted later.
+///
+/// # A source with no words is a mareh makom
+///
+/// A packet whose `text` is empty is not a failed quote — it is a **citation on
+/// its own**, which is what a page of a scan is until it has been OCR'd
+/// (spec.md §6.3, W25): the daf is citable long before anything can read the
+/// words off it. Written as a quote it would arrive in the document as
+/// `#ציטוט[]`, an empty block that looks exactly like a paste that went wrong,
+/// and the writer has no way to tell which end it happened at. So it arrives as
+/// the mekor alone, which is the thing that was actually sent.
 #[must_use]
 pub fn to_ksav(packet: &SourcePacket, placement: CitationPlacement) -> String {
     let mut out = String::with_capacity(packet.text.len() + packet.display.len() + 64);
-    out.push_str(&quote_block(&packet.text));
+    let quoting = !packet.text.trim().is_empty();
+    if quoting {
+        out.push_str(&quote_block(&packet.text));
+    }
     match placement {
         CitationPlacement::Mekor => out.push_str(&mekor(&packet.display, Some(&packet.reference))),
-        CitationPlacement::Inline => {
+        CitationPlacement::Inline if quoting => {
             out.push(' ');
             out.push_str(&inline_citation(&packet.display));
         }
+        // With nothing in front of it there is nothing for a citation to be
+        // *inline* with, and `#מקור[…]` alone is a source note floating in the
+        // prose. A mareh makom is what a sefer writes here.
+        CitationPlacement::Inline => out.push_str(&mekor(&packet.display, Some(&packet.reference))),
     }
     if let Some(note) = &packet.note {
         // A margin note that travelled with the source is the writer's own
@@ -314,6 +331,24 @@ mod tests {
             markup.contains("מקור: \"girsa:shulchan-arukh/orach-chayim/1:1\""),
             "{markup}"
         );
+    }
+
+    #[test]
+    fn a_source_with_no_words_arrives_as_a_mareh_makom_and_not_as_an_empty_quote() {
+        // A page of a scan (W25). The daf is citable the moment somebody says
+        // which page it is on, and there is nothing to quote until the scan has
+        // been OCR'd — so what is sent is a mekor, and `#ציטוט[]` in the middle
+        // of somebody's chaburah reads as a paste that failed.
+        let r: Ref = "girsa:bavli/berakhot/2a".parse().expect("the ref parses");
+        let page = SourcePacket::new(&r, "ברכות ב.", "");
+        for placement in [CitationPlacement::Mekor, CitationPlacement::Inline] {
+            let markup = to_ksav(&page, placement);
+            assert!(!markup.contains("#ציטוט"), "{markup}");
+            assert!(markup.contains("#מראה_מקום("), "{markup}");
+            assert!(markup.contains("girsa:bavli/berakhot/2a"), "{markup}");
+        }
+        // And a quote that has words still has both halves.
+        assert!(to_ksav(&packet(), CitationPlacement::Mekor).contains("#ציטוט["));
     }
 
     #[test]
