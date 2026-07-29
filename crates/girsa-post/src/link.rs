@@ -36,6 +36,13 @@ pub enum Errand {
     Open { reference: String },
     /// Insert this source into the open document.
     Insert { packet: String },
+    /// Look this up in the library's search.
+    ///
+    /// Where a citation could not be settled — no candidate fitted the phrase
+    /// somebody highlighted — the honest end of the road is the search, with
+    /// the phrase already in it (spec.md §10.4). Not a guess dressed up as an
+    /// answer.
+    Search { phrase: String },
 }
 
 /// Read a URL the operating system handed us.
@@ -60,6 +67,9 @@ pub fn deep_link(app: App, url: &str) -> Option<Errand> {
     match (app, errand.trim_end_matches('/')) {
         (App::Girsa, "open") => Some(Errand::Open {
             reference: field(query, "ref")?,
+        }),
+        (App::Girsa, "search") => Some(Errand::Search {
+            phrase: field(query, "q")?,
         }),
         (App::Ksav, "insert") => Some(Errand::Insert {
             packet: field(query, "packet")?,
@@ -182,6 +192,16 @@ mod tests {
             ),
             Some(Errand::Open {
                 reference: "ברכות".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_phrase_nobody_could_place_ends_in_the_search_rather_than_a_guess() {
+        assert_eq!(
+            deep_link(App::Girsa, "girsa://search?q=%D7%99%D7%AA%D7%92%D7%91%D7%A8"),
+            Some(Errand::Search {
+                phrase: "יתגבר".into()
             })
         );
     }
