@@ -41,7 +41,7 @@
 //! the reason, which is what the window shows instead of an affordance that
 //! would do nothing.
 
-#![doc(html_root_url = "https://docs.rs/girsa-post/0.3.0")]
+#![doc(html_root_url = "https://docs.rs/girsa-post/0.4.0")]
 
 use std::fmt;
 use std::io::{BufRead, BufReader, Read, Write};

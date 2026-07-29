@@ -31,7 +31,11 @@
 //! thousands of characters from the quote, with the preview blank and nothing
 //! pointing at what caused it.
 
-#![doc(html_root_url = "https://docs.rs/girsa-ksav/0.3.0")]
+#![doc(html_root_url = "https://docs.rs/girsa-ksav/0.4.0")]
+
+pub mod read;
+
+pub use read::{read, Block, NoteKind};
 
 use girsa_source::SourcePacket;
 
@@ -168,88 +172,39 @@ pub fn heading(level: u8, text: &str) -> String {
 ///
 /// It is a **reading**, not an evaluation: Typst is the only thing that can
 /// say what a document *renders* as, and running the compiler to put a
-/// paragraph on a shelf would put the whole engine inside the library. What it
-/// does is take the command names and their arguments off, keep the content
-/// blocks, and unescape — which is enough to index the words somebody wrote
-/// and to show them on a page (spec.md §10.4: *your writing becomes a sefer on
-/// the shelf, searchable and citable*).
+/// paragraph on a shelf would put the whole engine inside the library.
+///
+/// This is [`read`] rendered flat, and is deliberately not a second parser.
+/// The one it replaced took the command names and their arguments off and kept
+/// what was between the brackets, which lost a document's lists and tables
+/// **entirely** — they live in the arguments — and spliced its footnotes into
+/// the middle of the sentences that carried them. See [`read`] for the
+/// measurements.
 ///
 /// The file stays the truth, as everywhere else here. This is what a reader
 /// sees; the `.ksav` beside it is the document.
 #[must_use]
 pub fn to_text(markup: &str) -> String {
-    let mut out = String::with_capacity(markup.len());
-    let mut chars = markup.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            // A backslash escape: the character after it is one somebody
-            // wrote, not markup.
-            '\\' => {
-                if let Some(next) = chars.next() {
-                    out.push(next);
-                }
+    let mut out: Vec<String> = Vec::new();
+    for block in read(markup) {
+        match block {
+            Block::Heading { text, .. } | Block::Paragraph(text) | Block::Quote(text) => {
+                out.push(text);
             }
-            // A command: `#name`, then optional `(arguments)`, then the
-            // content blocks — whose *contents* are the words.
-            '#' => {
-                let mut depth = 0usize;
-                let mut in_string = false;
-                for next in chars.by_ref() {
-                    if depth > 0 {
-                        // Inside the arguments. They are settings, not words:
-                        // skipped to the matching bracket, allowing for
-                        // nesting and for a string with a bracket in it.
-                        match next {
-                            '"' => in_string = !in_string,
-                            '(' if !in_string => depth += 1,
-                            ')' if !in_string => depth -= 1,
-                            _ => {}
-                        }
-                        continue;
-                    }
-                    match next {
-                        '(' => depth = 1,
-                        '[' => {
-                            // The content block starts here; its contents are
-                            // words and are read by the outer loop.
-                            if !out.ends_with(char::is_whitespace) && !out.is_empty() {
-                                out.push(' ');
-                            }
-                            break;
-                        }
-                        // `#name` followed by anything else is a command with
-                        // no body — a page break, a table of contents. The
-                        // character that ended it is not part of the name.
-                        c if c.is_whitespace() => {
-                            out.push(c);
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            '[' | ']' => {
-                // A block boundary is a boundary between things, which reads
-                // as a space rather than as nothing: `#כותרת1[א]#ציטוט[ב]`
-                // is two paragraphs and not `אב`.
-                if !out.ends_with(char::is_whitespace) {
-                    out.push(' ');
-                }
-            }
-            _ => out.push(c),
+            Block::Item { ordinal, text, .. } => out.push(match ordinal {
+                Some(n) => format!("{n}. {text}"),
+                None => text,
+            }),
+            // Tab-separated, which is what a cell boundary is in every plain
+            // rendering of a table and what a reader can still see columns in.
+            Block::Row { cells, .. } => out.push(cells.join("	")),
+            Block::Note { marker, text, .. } => out.push(format!("{marker}. {text}")),
         }
     }
-    // Blank lines are paragraph boundaries and are kept; runs of spaces are
-    // not.
-    out.lines()
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join(
-            "
+    out.join(
+        "
 ",
-        )
-        .trim()
-        .to_string()
+    )
 }
 
 /// Every ref the document stores.
