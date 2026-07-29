@@ -24,7 +24,7 @@ crates exist to prevent in the first place.
 
 Three things pay it, and none of them are optional:
 
-1. **Exact version pins.** Both apps depend on `=0.2.0`, not `^0.2`. Taking a
+1. **Exact version pins.** Both apps depend on `=0.3.0`, not `^0.2`. Taking a
    new version is a deliberate act on each side.
 2. **CI here builds both dependents.** `tools/check-dependents.sh`, run by
    `.github/workflows/ci.yml`, builds and tests Girsa and Ksav against the
@@ -32,6 +32,51 @@ Three things pay it, and none of them are optional:
    rather than weeks later inside an app.
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
+
+## 0.3.0 — `girsa-cite`, and a whole sefer you can point at
+
+`girsa-cite` was a scaffold with an enum in it. It is now the formatter, and
+both applications compile it: **one implementation of what a citation is**, so
+the app that produces one and the app that prints one cannot disagree.
+
+```rust
+cite(&sefer, &r, CiteStyle::HebrewFull)   // שולחן ערוך, אורח חיים סימן א' סעיף א'
+cite(&sefer, &r, CiteStyle::HebrewShort)  // שולחן ערוך, אורח חיים א', א'
+cite(&sefer, &r, CiteStyle::English)      // Shulchan Arukh, Orach Chayim 1:1
+```
+
+The test that governs it is `every_citation_printed_here_reads_back_as_the_ref_it_came_from`:
+every citation the formatter prints is put through `resolve` and has to come
+back as the ref it was printed from. The formatter and the resolver are two
+halves of one claim — that a mareh makom in a Ksav document means a place in
+the library — and a printed form the resolver cannot read is a citation this
+system cannot follow.
+
+It refuses two things. It **does not invent an abbreviation**: `שו"ע או"ח` is
+printed only if the caller supplies it as the title, because nothing in the
+data says which of a work's 44 title variants a citation should use. And it
+**does not invent the word for a level** — `סימן`, `סעיף`, `דף` come from the
+schema's `heSectionNames`, and a work whose schema never said is cited by
+number, which is an ordinary way to write a mekor.
+
+Two things in `girsa-ref` moved to make that hold, and both were found by
+writing the formatter:
+
+- **Section words are the corpus's, all 42 of them.** `SECTION_WORDS` was a
+  list of nine Hebrew words somebody thought of. Across Sefaria's 6,595 schemas
+  there are 42 distinct `heSectionNames`, and the formatter prints citations
+  with those. `שורה` was missing, so `ברכות דף ב. שורה א'` — a citation Girsa
+  itself had just printed — resolved to `2a:שורה:1`. Three levels, one of them
+  a word, and it resolved. Five are deliberately still absent (`תורה`,
+  `תלמוד`, `ספר`, `תפילה`, `מדרש`): they are level names *and* how seforim are
+  called, and dropping them turns `משנה תורה הלכות תפילה` into a citation of
+  nothing in particular. The 2,970-citation regression corpus stays at 100.00%.
+- **A whole sefer can be written down.** `girsa:bavli/berakhot` cannot mean the
+  masechta — the last component is the address, always, so it reads back as the
+  work `bavli` at a section called `berakhot`, with no error. A **trailing
+  slash** now says the address is absent: `girsa:bavli/berakhot/`. The form
+  without it keeps meaning exactly what it meant, so nothing already written
+  down changes underfoot.
 
 ## 0.2.0 — the hyphen
 

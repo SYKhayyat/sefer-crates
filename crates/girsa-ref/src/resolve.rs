@@ -214,21 +214,67 @@ fn numbered_address(rest: &str) -> Option<Address> {
 /// person which level is which and tell this function nothing, because the
 /// order already does.
 ///
-/// **Written in their normal form**, final letters folded — `סעיף` normalizes
-/// to `סעיפ`, and a list holding the printed spelling never matches. When it
-/// did not match, the word fell through to the numeral reader and `סעיף` became
-/// 220, so `שוע אוח סימן א סעיף א` resolved to `160:1:220:1`. Four levels, all
-/// wrong, and it resolved.
-const SECTION_WORDS: [&str; 17] = [
-    "סימנ",
-    "סעיפ",
+/// # Where the list comes from
+///
+/// **Measured, not thought of.** Sefaria's 6,595 schemas name their levels in
+/// `heSectionNames`, and across all of them there are exactly 42 distinct
+/// words. Those are the words `girsa-cite` prints a citation with, so a word
+/// the formatter writes and this function cannot read is a citation the system
+/// prints and cannot follow. `שורה` — Sefaria's name for the segment inside a
+/// daf, 242 nodes — was missing, and `ברכות דף ב. שורה א'` resolved to
+/// `2a:שורה:1`: three levels, one of them a word, and it resolved.
+///
+/// Multi-word names (`סעיף קטן`, `מצות עשה`) are listed by their parts, because
+/// the matching is per token.
+///
+/// # The five that are deliberately absent
+///
+/// `תורה`, `תלמוד`, `ספר`, `תפילה` and `מדרש` are all level names in some
+/// schema and all of them are how seforim are *called*. A title is matched
+/// before the address, so they are usually safe — but where the lexicon knows
+/// only a prefix of the title, skipping them turns the rest of the name into
+/// nothing and the citation lands on the whole sefer instead of saying it did
+/// not understand. Kept as named levels, which is the more honest failure.
+///
+/// `שער הגמול - רמב"ן` is a node's *title* rather than a level word, and is
+/// left alone for the same reason.
+const SECTION_WORDS: [&str; 45] = [
+    // Hebrew, as the schemas print them.
+    "סימן",
+    "סעיף",
+    "קטן",
     "פרק",
+    "פסקה",
+    "פירוש",
+    "פרשנות",
     "הלכה",
     "הלכות",
     "משנה",
-    "דפ",
+    "תוספתא",
+    "דף",
     "עמוד",
+    "שורה",
     "פסוק",
+    "פרשה",
+    "חלק",
+    "כרך",
+    "מצוה",
+    "דרוש",
+    "מאמר",
+    "כלל",
+    "תשובה",
+    "שורש",
+    "שער",
+    "אות",
+    "מזמור",
+    "רמז",
+    "נתיב",
+    "חדר",
+    "קובץ",
+    "פיוט",
+    "הדרן",
+    "סיפור",
+    // English, from the same schemas' `sectionNames`.
     "siman",
     "seif",
     "chapter",
@@ -237,7 +283,21 @@ const SECTION_WORDS: [&str; 17] = [
     "daf",
     "mishnah",
     "verse",
+    "paragraph",
+    "comment",
+    "line",
 ];
+
+/// The same words in the form a token is compared in.
+///
+/// Normalized once rather than written normalized: `סעיף` normalizes to
+/// `סעיפ`, and a hand-normalized list is a list that drifts the first time
+/// somebody adds a word with a final letter in it. When it drifted, the word
+/// fell through to the numeral reader and `סעיף` became 220, so
+/// `שוע אוח סימן א סעיף א` resolved to `160:1:220:1` — four levels, all wrong,
+/// and it resolved.
+static SECTION_WORD_SET: std::sync::LazyLock<std::collections::BTreeSet<String>> =
+    std::sync::LazyLock::new(|| SECTION_WORDS.iter().map(|w| normalize(w)).collect());
 
 /// Abbreviated labels, recognised **only when the token carries a geresh**.
 ///
@@ -292,7 +352,8 @@ fn parse_address(rest: &str) -> Option<Address> {
         let had_geresh = normalized.ends_with('\'') || normalized.ends_with('"');
         let bare = normalized.trim_end_matches(['\'', '"']);
 
-        if SECTION_WORDS.contains(&bare) || (had_geresh && SECTION_ABBREVIATIONS.contains(&bare)) {
+        if SECTION_WORD_SET.contains(bare) || (had_geresh && SECTION_ABBREVIATIONS.contains(&bare))
+        {
             continue;
         }
 
@@ -497,6 +558,44 @@ mod tests {
             resolved("רמב\"ם הל' תפילה פ\"ד ה\"א"),
             "girsa:mishneh-torah/tefilah/4:1"
         );
+    }
+
+    #[test]
+    fn the_words_the_corpus_uses_for_a_level_are_read_as_labels() {
+        // Not a list somebody thought of: these are the distinct
+        // `heSectionNames` across Sefaria's 6,595 schemas, which is what
+        // `girsa-cite` prints a citation with. A word the formatter writes and
+        // the resolver cannot read is a citation this system prints and cannot
+        // follow — see `girsa-cite`'s round-trip test, which is what found
+        // `שורה` missing here.
+        assert_eq!(resolved("ברכות דף ב. שורה א'"), "girsa:bavli/berakhot/2a:1");
+        assert_eq!(
+            resolved("שו\"ע או\"ח סימן קכ\"א סעיף ג'"),
+            "girsa:shulchan-arukh/orach-chayim/121:3"
+        );
+        // `פסקה` is the commonest of the 42 by a distance — 18,793 nodes.
+        assert_eq!(resolved("ברכות פסקה ג'"), "girsa:bavli/berakhot/3");
+        // `אות` is how a nosei keilim is cited, and it was missing too.
+        assert_eq!(resolved("ברכות אות ה'"), "girsa:bavli/berakhot/5");
+        assert_eq!(
+            resolved("ברכות חלק ב' פירוש ד'"),
+            "girsa:bavli/berakhot/2:4"
+        );
+    }
+
+    #[test]
+    fn a_word_that_names_a_sefer_is_not_thrown_away_as_a_label() {
+        // The other half of the same decision. `תורה`, `תלמוד`, `ספר`,
+        // `מדרש` and `תפילה` all appear in the schemas as level names, and all
+        // of them are how seforim are called. Skipping them would turn
+        // `משנה תורה הלכות תפילה` into a citation of nothing in particular —
+        // so they are deliberately not on the list, and a citation that uses
+        // one as a section keeps it as a named level instead.
+        assert_eq!(
+            resolved("משנה תורה הלכות תפילה פ\"ד ה\"א"),
+            "girsa:mishneh-torah/tefilah/4:1"
+        );
+        assert_eq!(resolved("ברכות תורה ג'"), "girsa:bavli/berakhot/תורה:3");
     }
 
     #[test]

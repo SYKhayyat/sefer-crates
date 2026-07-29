@@ -133,7 +133,12 @@ impl fmt::Display for Ref {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "girsa:{}", self.work.join("/"))?;
         if self.from.is_empty() {
-            return Ok(());
+            // The trailing slash is what says *there is no address*. Without
+            // it, `girsa:bavli/berakhot` is read back — correctly, by the rule
+            // above — as the work `bavli` at a section called `berakhot`, and
+            // a ref to a whole sefer whose slug has more than one part could
+            // not be written down at all.
+            return f.write_str("/");
         }
         write!(f, "/{}", self.from)?;
         if let Some(to) = &self.to {
@@ -152,6 +157,17 @@ impl FromStr for Ref {
         // means a segment id read as a ref points at the right place, which is
         // what a citation formatter wants.
         let body = body.split('#').next().unwrap_or(body);
+
+        // A trailing slash says the address is absent — see `Display`. Checked
+        // before the split, because `rsplit_once` on it would hand the address
+        // reader an empty string and get back a work with an empty component.
+        if let Some(head) = body.strip_suffix('/') {
+            let work: Vec<String> = head.split('/').map(str::to_string).collect();
+            if head.is_empty() || work.iter().any(String::is_empty) {
+                return Err(RefError::NoWork);
+            }
+            return Ok(Self::whole_work(work));
+        }
 
         match body.rsplit_once('/') {
             // The last component is the address — unless it does not read as
@@ -270,8 +286,34 @@ mod tests {
     fn a_ref_to_a_whole_sefer_has_no_address() {
         let r: Ref = "girsa:berakhot".parse().expect("parses");
         assert_eq!(r.work_slug(), "berakhot");
-        assert_eq!(r.to_string(), "girsa:berakhot");
+        assert_eq!(r.to_string(), "girsa:berakhot/");
         assert!(!r.is_span());
+    }
+
+    #[test]
+    fn a_whole_sefer_whose_slug_has_parts_can_be_written_down() {
+        // `girsa:bavli/berakhot` cannot mean the masechta: the last component
+        // is the address, always, so it reads back as the work `bavli` at a
+        // section called `berakhot`. Nothing errors — which is the dangerous
+        // part — and a citation of a whole sefer is an ordinary thing to write
+        // ("עיין שולחן ערוך, אורח חיים"). The trailing slash is what says the
+        // address is absent rather than being the last thing before it.
+        let r = Ref::whole_work(vec!["bavli".into(), "berakhot".into()]);
+        assert_eq!(r.to_string(), "girsa:bavli/berakhot/");
+        assert!(r.is_well_formed(), "{r} does not read back as itself");
+        assert_eq!(r.to_string().parse::<Ref>().expect("parses"), r);
+
+        // And the form without it keeps meaning what it has always meant, so
+        // nothing already written down changes underfoot.
+        let addressed: Ref = "girsa:bavli/berakhot".parse().expect("parses");
+        assert_eq!(addressed.work_slug(), "bavli");
+        assert_eq!(addressed.from().to_string(), "berakhot");
+    }
+
+    #[test]
+    fn a_trailing_slash_over_nothing_is_not_a_work() {
+        assert_eq!("girsa:/".parse::<Ref>().unwrap_err(), RefError::NoWork);
+        assert_eq!("girsa://x/".parse::<Ref>().unwrap_err(), RefError::NoWork);
     }
 
     #[test]
