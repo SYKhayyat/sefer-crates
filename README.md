@@ -14,6 +14,7 @@ the class of bug that would destroy trust in the pairing.
 | `girsa-ref` | Refs, citation parsing, offline resolution, the redirect table |
 | `girsa-hebrew` | Normalization — nikud, prefixes, ktiv male/chaser, gershayim, abbreviations |
 | `girsa-cite` | Citation formatting — one implementation, both apps |
+| `girsa-post` | The loopback between them: token-gated, localhost only, and the `girsa://` links |
 
 ## The cost of three repositories, and how it is paid
 
