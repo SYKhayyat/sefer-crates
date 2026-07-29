@@ -1,0 +1,27 @@
+[package]
+name = "girsa-post"
+description = "The loopback between Girsa and Ksav — token-gated, localhost only, and the deep links"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# The token comes from the operating system's randomness. Not from the clock
+# and not from the pid: both are things another process on the machine knows.
+getrandom = "0.3"
+# The same server Ksav already runs `ksav serve` on. Optional, so a build that
+# only sends does not compile a listener it never opens.
+tiny_http = { version = "0.12", optional = true }
+
+[features]
+default = ["serve"]
+serve = ["dep:tiny_http"]
+
+[lints]
+workspace = true

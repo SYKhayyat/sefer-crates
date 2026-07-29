@@ -33,7 +33,7 @@ Three things pay it, and none of them are optional:
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
 
-## 0.3.0 — `girsa-cite`, and a whole sefer you can point at
+## 0.3.0 — `girsa-cite`, `girsa-post`, and a whole sefer you can point at
 
 `girsa-cite` was a scaffold with an enum in it. It is now the formatter, and
 both applications compile it: **one implementation of what a citation is**, so
@@ -59,8 +59,41 @@ data says which of a work's 44 title variants a citation should use. And it
 schema's `heSectionNames`, and a work whose schema never said is cited by
 number, which is an ordinary way to write a mekor.
 
-Two things in `girsa-ref` moved to make that hold, and both were found by
-writing the formatter:
+### `girsa-post` — the loopback
+
+New crate, and it is here for the same reason the others are: the two ends of a
+protocol that live in different repositories drift, and a protocol both ends
+compile cannot.
+
+```text
+Girsa ──POST /insert──▶ Ksav      a source, into the open document
+Ksav  ──POST /open  ──▶ Girsa     a citation, to the page it names
+Ksav  ──POST /cite  ──▶ Girsa     print this ref in that style
+Ksav  ──POST /quote ──▶ Girsa     the words again, from the corpus as it stands
+either ─GET  /health──▶ other     is my sibling there?
+```
+
+`127.0.0.1` on a port the operating system picks, published in a per-user file
+with a token minted from the operating system's randomness. **Localhost is not
+private** — every process on the machine can reach a loopback port, and so can
+a web page — so the token is required on every path including `/health`, it
+travels in a header rather than a URL, and the desk sends no CORS headers and
+answers no preflight, which is what stops a browser tab that guessed both.
+
+`presence()` *asks*: an endpoint file left behind by a crash is `Stale` with
+the reason, not `Live`. That is what lets each application show whether its
+sibling is there, so an affordance is never offered when it would fail.
+
+And the deep links, whose short form is the interesting one: `girsa://open?ref=…`
+works, and so does a bare `girsa:bavli/berakhot/2a:1` — because **a ref is
+already a URI**. The string a Ksav document has been storing all along is a
+link that lands, which is why the citation in Girsa's HTML clipboard flavour is
+an `<a href="girsa:…">`: paste a quote into Word, print it to PDF, and the mekor
+in the PDF opens the page.
+
+### Two things `girsa-ref` moved
+
+Both were found by writing the formatter:
 
 - **Section words are the corpus's, all 42 of them.** `SECTION_WORDS` was a
   list of nine Hebrew words somebody thought of. Across Sefaria's 6,595 schemas
