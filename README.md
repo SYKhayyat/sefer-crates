@@ -107,6 +107,25 @@ The split of labour is exact: this crate asserts that it *wrote* `#ציטוט[�
 only Ksav can assert that **Typst accepts it**, and those tests stay there,
 compiling with the real engine.
 
+### The ref in the document, and what it makes possible
+
+`girsa-ksav`'s `mekor` now writes
+
+```
+#מראה_מקום(מקור: "girsa:shulchan-arukh/orach-chayim/1:3")[שולחן ערוך, אורח חיים סימן א' סעיף ג']
+```
+
+The ref is **stored and not printed**, which is what spec.md §10.2 has always
+said and what the markup was quietly not doing. Three things in the two
+applications are that one change seen from different sides: a mareh mekomos is
+a sort and a print, *where did I use this* is a scan rather than a guess, and a
+citation in a compiled PDF is a link that opens the page it names.
+
+`live_citation` is what linkify writes — the words print exactly as they were
+typed, with the ref underneath — and `to_text` reads a document back as the
+words somebody wrote, which is how Girsa puts your own writing on the shelf
+without indexing `#כותרת1[`.
+
 ### Two things `girsa-ref` moved
 
 Both were found by writing the formatter:

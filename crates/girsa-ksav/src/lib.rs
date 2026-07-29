@@ -54,7 +54,7 @@ pub fn to_ksav(packet: &SourcePacket, placement: CitationPlacement) -> String {
     let mut out = String::with_capacity(packet.text.len() + packet.display.len() + 64);
     out.push_str(&quote_block(&packet.text));
     match placement {
-        CitationPlacement::Mekor => out.push_str(&mekor(&packet.display)),
+        CitationPlacement::Mekor => out.push_str(&mekor(&packet.display, Some(&packet.reference))),
         CitationPlacement::Inline => {
             out.push(' ');
             out.push_str(&inline_citation(&packet.display));
@@ -76,10 +76,55 @@ pub fn quote_block(text: &str) -> String {
     format!("#ציטוט[{}]", escape(text))
 }
 
-/// `#מראה_מקום[…]` — the citation as a footnote.
+/// `#מראה_מקום(מקור: "girsa:…")[…]` — the citation as a footnote, **carrying
+/// the ref**.
+///
+/// The ref is stored and not printed, and it is the whole of the pairing's
+/// promise (spec.md §10.2): a document that keeps the *place* can be re-printed
+/// in another style, or have its quotes regenerated against a corrected
+/// edition, without touching a word of the prose. A document that keeps only
+/// the printed string can do neither — and until this argument existed, that is
+/// exactly what Girsa was writing.
+///
+/// It is also what `#מראה_מקומות()` collects into a source list at the back:
+/// the refs are already in the document, so a mareh mekomos is a sort and a
+/// print.
 #[must_use]
-pub fn mekor(citation: &str) -> String {
-    format!("#מראה_מקום[{}]", escape(citation))
+pub fn mekor(citation: &str, reference: Option<&str>) -> String {
+    match reference {
+        Some(reference) => format!(
+            "#מראה_מקום(מקור: \"{}\")[{}]",
+            in_a_string(reference),
+            escape(citation)
+        ),
+        None => format!("#מראה_מקום[{}]", escape(citation)),
+    }
+}
+
+/// Escaping for a Typst **string**, which is not the same as for markup.
+///
+/// A ref carries `:` and `/` and neither matters here; what would end the
+/// string early is a quote mark, and what would eat the next character is a
+/// backslash. Refs contain neither today — and "today" is not a thing to rely
+/// on when the alternative is two lines.
+fn in_a_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// `#מקור_חי(מקור: "girsa:…")[…]` — a citation in the flow of the prose that
+/// keeps its ref.
+///
+/// What linkify writes (spec.md §10.5): the words are printed exactly as they
+/// were written and the ref rides underneath, so the citation counts in the
+/// mareh mekomos and — because Ksav renders it as a `link` — **opens the page
+/// it names when it is clicked in a compiled PDF** (§10.6).
+#[must_use]
+pub fn live_citation(citation: &str, reference: &str) -> String {
+    format!(
+        "#מקור_חי(מקור: \"{}\")[{}]",
+        in_a_string(reference),
+        escape(citation)
+    )
 }
 
 /// `#מקור[…]` — the citation inline, in small grey type.
@@ -98,6 +143,119 @@ pub fn editor_note(note: &str) -> String {
 #[must_use]
 pub fn heading(level: u8, text: &str) -> String {
     format!("#כותרת{}[{}]\n", level.clamp(1, 6), escape(text))
+}
+
+/// The words of a Ksav document, with the commands taken off.
+///
+/// # What this is and is not
+///
+/// It is a **reading**, not an evaluation: Typst is the only thing that can
+/// say what a document *renders* as, and running the compiler to put a
+/// paragraph on a shelf would put the whole engine inside the library. What it
+/// does is take the command names and their arguments off, keep the content
+/// blocks, and unescape — which is enough to index the words somebody wrote
+/// and to show them on a page (spec.md §10.4: *your writing becomes a sefer on
+/// the shelf, searchable and citable*).
+///
+/// The file stays the truth, as everywhere else here. This is what a reader
+/// sees; the `.ksav` beside it is the document.
+#[must_use]
+pub fn to_text(markup: &str) -> String {
+    let mut out = String::with_capacity(markup.len());
+    let mut chars = markup.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            // A backslash escape: the character after it is one somebody
+            // wrote, not markup.
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    out.push(next);
+                }
+            }
+            // A command: `#name`, then optional `(arguments)`, then the
+            // content blocks — whose *contents* are the words.
+            '#' => {
+                let mut depth = 0usize;
+                let mut in_string = false;
+                for next in chars.by_ref() {
+                    if depth > 0 {
+                        // Inside the arguments. They are settings, not words:
+                        // skipped to the matching bracket, allowing for
+                        // nesting and for a string with a bracket in it.
+                        match next {
+                            '"' => in_string = !in_string,
+                            '(' if !in_string => depth += 1,
+                            ')' if !in_string => depth -= 1,
+                            _ => {}
+                        }
+                        continue;
+                    }
+                    match next {
+                        '(' => depth = 1,
+                        '[' => {
+                            // The content block starts here; its contents are
+                            // words and are read by the outer loop.
+                            if !out.ends_with(char::is_whitespace) && !out.is_empty() {
+                                out.push(' ');
+                            }
+                            break;
+                        }
+                        // `#name` followed by anything else is a command with
+                        // no body — a page break, a table of contents. The
+                        // character that ended it is not part of the name.
+                        c if c.is_whitespace() => {
+                            out.push(c);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            '[' | ']' => {
+                // A block boundary is a boundary between things, which reads
+                // as a space rather than as nothing: `#כותרת1[א]#ציטוט[ב]`
+                // is two paragraphs and not `אב`.
+                if !out.ends_with(char::is_whitespace) {
+                    out.push(' ');
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    // Blank lines are paragraph boundaries and are kept; runs of spaces are
+    // not.
+    out.lines()
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join(
+            "
+",
+        )
+        .trim()
+        .to_string()
+}
+
+/// Every ref the document stores.
+///
+/// The other half of `מקור:` (see [`mekor`]): because the refs are *in* the
+/// document, "where did I use this?" is a scan rather than a guess, and a
+/// mareh mekomos is a sort and a print (spec.md §10.4).
+#[must_use]
+pub fn refs_in(markup: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = markup;
+    while let Some(at) = rest.find("מקור:") {
+        rest = &rest[at + "מקור:".len()..];
+        let Some(open) = rest.find('"') else { break };
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('"') else { break };
+        let found = &after[..close];
+        if found.starts_with("girsa:") && !out.iter().any(|r| r == found) {
+            out.push(found.to_string());
+        }
+        rest = &after[close + 1..];
+    }
+    out
 }
 
 /// Escape the characters Typst reads as markup.
@@ -140,8 +298,33 @@ mod tests {
     fn a_source_becomes_a_quote_with_a_mekor() {
         let markup = to_ksav(&packet(), CitationPlacement::Mekor);
         assert!(markup.contains("#ציטוט["));
-        assert!(markup.contains("#מראה_מקום["));
+        assert!(markup.contains("#מראה_מקום("));
         assert!(markup.contains("יתגבר כארי"));
+    }
+
+    #[test]
+    fn the_document_keeps_the_place_and_not_only_the_printed_string() {
+        // spec.md §10.2, and for three work orders this was quietly false:
+        // the markup carried `#מראה_מקום[שו"ע או"ח סימן א' סעיף א']` and the
+        // ref went nowhere. A document like that cannot be re-styled, cannot
+        // have its quotes regenerated, and cannot answer *where did I use
+        // this* — every one of which the spec promises.
+        let markup = to_ksav(&packet(), CitationPlacement::Mekor);
+        assert!(
+            markup.contains("מקור: \"girsa:shulchan-arukh/orach-chayim/1:1\""),
+            "{markup}"
+        );
+    }
+
+    #[test]
+    fn a_citation_with_no_ref_behind_it_still_prints() {
+        // Linkified prose and a citation typed by hand have no ref until
+        // somebody resolves one. The command takes both shapes rather than
+        // making the caller invent a ref to satisfy it.
+        assert_eq!(
+            mekor("שו\"ע או\"ח א' א'", None),
+            "#מראה_מקום[שו\"ע או\"ח א' א']"
+        );
     }
 
     #[test]
@@ -188,6 +371,54 @@ mod tests {
         // Inside the quote block it is not.
         let quote = markup.split("#מראה_מקום").next().unwrap_or_default();
         assert!(!quote.contains("צריך עיון"));
+    }
+
+    #[test]
+    fn a_linkified_citation_prints_the_same_words_and_keeps_the_place() {
+        let markup = live_citation(
+            "שו\"ע או\"ח סימן א' סעיף ג'",
+            "girsa:shulchan-arukh/orach-chayim/1:3",
+        );
+        assert!(markup.contains("שו\"ע או\"ח סימן א' סעיף ג'"), "{markup}");
+        assert_eq!(refs_in(&markup), ["girsa:shulchan-arukh/orach-chayim/1:3"]);
+        // And it reads back as the words, with nothing of the markup in them.
+        assert_eq!(to_text(&markup).trim(), "שו\"ע או\"ח סימן א' סעיף ג'");
+    }
+
+    #[test]
+    fn a_document_reads_back_as_the_words_somebody_wrote() {
+        // A real document: a heading, a quote with its mekor, and a line of
+        // the writer's own with an escaped `#` in it — which is a numeral sign
+        // in Hebrew and turns up constantly.
+        let markup = r#"#כותרת1[השכמת הבוקר]
+#ציטוט[ראוי לכל ירא שמים]#מראה_מקום(מקור: "girsa:x/1:3")[שו"ע א' ג']
+
+וצריך עיון על מה שכתב \#ד'.
+"#;
+        let text = to_text(markup);
+        assert!(text.contains("השכמת הבוקר"), "{text}");
+        assert!(text.contains("ראוי לכל ירא שמים"), "{text}");
+        assert!(text.contains("וצריך עיון על מה שכתב #ד'."), "{text}");
+        // The command names and their arguments are not words anybody wrote.
+        assert!(!text.contains("כותרת1"), "{text}");
+        assert!(!text.contains("girsa:x/1:3"), "{text}");
+        assert!(!text.contains('#') || text.contains("#ד'"), "{text}");
+    }
+
+    #[test]
+    fn the_refs_a_document_stores_can_be_read_back_out_of_it() {
+        // *Where did I use this?* is a scan, because the refs are in the
+        // document rather than only in the printed string.
+        let markup = to_ksav(&packet(), CitationPlacement::Mekor).repeat(2)
+            + "#מראה_מקום(מקור: \"girsa:bavli/berakhot/2a:1\")[ברכות ב.]";
+        assert_eq!(
+            refs_in(&markup),
+            [
+                "girsa:shulchan-arukh/orach-chayim/1:1",
+                "girsa:bavli/berakhot/2a:1"
+            ]
+        );
+        assert!(refs_in("prose with no citations at all").is_empty());
     }
 
     #[test]

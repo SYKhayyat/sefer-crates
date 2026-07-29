@@ -199,7 +199,10 @@ mod tests {
     #[test]
     fn a_phrase_nobody_could_place_ends_in_the_search_rather_than_a_guess() {
         assert_eq!(
-            deep_link(App::Girsa, "girsa://search?q=%D7%99%D7%AA%D7%92%D7%91%D7%A8"),
+            deep_link(
+                App::Girsa,
+                "girsa://search?q=%D7%99%D7%AA%D7%92%D7%91%D7%A8"
+            ),
             Some(Errand::Search {
                 phrase: "יתגבר".into()
             })
