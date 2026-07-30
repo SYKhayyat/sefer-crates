@@ -13,10 +13,22 @@
 //!
 //! # Why this is a crate and not a documented JSON shape
 //!
-//! Adding a field is a compile error on the side that ignores it, rather than a
-//! silent production bug (spec.md §10.1). Both applications link against this
-//! one definition, so the app that *produces* a citation and the app that
-//! *prints* it cannot disagree about what one is.
+//! Both applications link against this one definition, so the app that
+//! *produces* a citation and the app that *prints* it cannot drift into
+//! disagreeing about what one is (spec.md §10.1). A documented shape drifts in
+//! silence; a shared type drifts at compile time or not at all.
+//!
+//! How far that goes is worth being exact about, because this note used to
+//! overstate it — it claimed *"adding a field is a compile error on the side
+//! that ignores it"* thirty lines above [`PACKET_SCHEMA_VERSION`] saying an
+//! optional field needs no bump, and both cannot be true.
+//!
+//! Adding a **required** field is a compile error, at every site that builds a
+//! packet. Adding an **optional** one is not: serde fills it in, deliberately,
+//! and that is exactly what lets a newer producer keep talking to an older
+//! consumer instead of breaking it. The guard for the case the compiler cannot
+//! see is the schema version, checked before any field is read — see below.
+//! That is the stronger of the two mechanisms and the one to reason about.
 //!
 //! # Why the ref is stored and not just the printed string
 //!
