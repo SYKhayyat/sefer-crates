@@ -51,6 +51,23 @@ for entry in "${dependents[@]}"; do
   fi
 done
 
+# Building both dependents proves they still compile against this tree. It does
+# not prove they still agree with each other — and the Source Packet, which is
+# the thing they agree *about*, is defined in this repository. Ksav asserts
+# against a fixture of a packet Girsa really produced, so a change here can
+# quietly move the producer away from that fixture while every build stays
+# green. Girsa owns the check; this runs it, because this is the repository
+# whose change would cause it.
+fixture_check="$siblings/Girsa/tools/check-ksav-fixture.sh"
+if [[ -f "$fixture_check" && -f "$siblings/Ksav/ksav/engine/tests/fixtures/girsa-packet.json" ]]; then
+  echo "== girsa -> ksav: the packet against the fixture the pen asserts on"
+  if ! bash "$fixture_check"; then
+    failed+=("girsa->ksav (packet fixture)")
+  fi
+else
+  skipped+=("girsa->ksav packet fixture")
+fi
+
 echo
 if [[ ${#skipped[@]} -gt 0 ]]; then
   # Loud, because a silently skipped dependent is a check that passes by not
