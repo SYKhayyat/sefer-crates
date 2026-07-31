@@ -48,12 +48,25 @@ pub enum Errand {
 /// Read a URL the operating system handed us.
 ///
 /// `None` for anything this does not recognise, including a scheme belonging
-/// to the other application: `ksav://insert?…` arriving at Girsa is a
+/// to the other application: `ksav://insert?...` arriving at Girsa is a
 /// misconfigured machine, not an instruction.
+///
+/// # The scheme is compared without regard to case
+///
+/// RFC 3986 makes a scheme case-insensitive, and PDF viewers and mail clients
+/// normalise it — usually upward. `GIRSA:bavli/berakhot/2a:1` out of one of them
+/// was refused as a misconfigured machine, which is a refusal aimed at the wrong
+/// thing entirely. Only the scheme is folded; everything after the colon is a ref
+/// or a packet, and Hebrew has no case to fold.
 #[must_use]
 pub fn deep_link(app: App, url: &str) -> Option<Errand> {
     let url = url.trim();
-    let rest = url.strip_prefix(app.as_str())?.strip_prefix(':')?;
+    let scheme = app.as_str();
+    // Fold the scheme, keep the rest byte for byte.
+    if url.len() <= scheme.len() || !url[..scheme.len()].eq_ignore_ascii_case(scheme) {
+        return None;
+    }
+    let rest = url[scheme.len()..].strip_prefix(':')?;
 
     // `girsa:bavli/berakhot/2a:1` — a bare ref, which is the form a citation
     // in a document carries.
@@ -78,22 +91,28 @@ pub fn deep_link(app: App, url: &str) -> Option<Errand> {
     }
 }
 
-/// One field out of a query string, percent-decoded.
+/// One field out of a query string, percent-decoded — or nothing.
+///
+/// `None` when the bytes are not UTF-8, rather than a lossy decode. This used to
+/// be `from_utf8_lossy`, which turns `%FF` into U+FFFD **silently**, so a link
+/// corrupted in transit became a *different, valid-looking* ref rather than a
+/// refusal — in the one crate whose governing rule is that a wrong ref is worse
+/// than no ref. A replacement character inside a segment id is not a segment id.
 fn field(query: &str, name: &str) -> Option<String> {
     query
         .split('&')
         .filter_map(|pair| pair.split_once('='))
         .find(|(key, _)| *key == name)
-        .map(|(_, value)| decode(value))
+        .and_then(|(_, value)| decode(value))
         .filter(|value| !value.is_empty())
 }
 
-/// Percent-decoding, and `+` for a space.
+/// Percent-decoding, and `+` for a space. `None` if the result is not UTF-8.
 ///
 /// A packet is JSON and a ref carries `:` and `/`, so both arrive encoded.
 /// Written here rather than taken from a crate because it is fifteen lines and
 /// this is the only place either application decodes a URL.
-fn decode(raw: &str) -> String {
+fn decode(raw: &str) -> Option<String> {
     let bytes = raw.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
     let mut at = 0;
@@ -124,7 +143,8 @@ fn decode(raw: &str) -> String {
             }
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    // `from_utf8`, not `from_utf8_lossy`. See `field`.
+    String::from_utf8(out).ok()
 }
 
 #[cfg(test)]
@@ -219,5 +239,84 @@ mod tests {
         assert_eq!(deep_link(App::Girsa, "girsa://open"), None);
         assert_eq!(deep_link(App::Girsa, "girsa://open?ref="), None);
         assert_eq!(deep_link(App::Girsa, "girsa:"), None);
+    }
+
+    /// RFC 3986 makes a scheme case-insensitive, and viewers normalise it.
+    ///
+    /// A PDF viewer that upper-cases the scheme handed over a link that was refused
+    /// as *"a misconfigured machine"* — a refusal aimed at the wrong thing entirely.
+    /// Only the scheme folds; everything after the colon is compared byte for byte,
+    /// because a slug is a slug and Hebrew has no case to fold.
+    #[test]
+    fn the_scheme_is_read_without_regard_to_case() {
+        assert_eq!(
+            deep_link(App::Girsa, "girsa:bavli/berakhot/2a:1"),
+            Some(Errand::Open {
+                reference: "girsa:bavli/berakhot/2a:1".to_string(),
+            })
+        );
+        for shouted in [
+            "GIRSA:bavli/berakhot/2a:1",
+            "Girsa:bavli/berakhot/2a:1",
+            "gIrSa:bavli/berakhot/2a:1",
+        ] {
+            match deep_link(App::Girsa, shouted) {
+                // The ref is the URL as it arrived: the resolver is handed what was
+                // handed to us, not a version of it we have altered.
+                Some(Errand::Open { reference }) => assert_eq!(reference, shouted),
+                other => panic!("{shouted} was refused: {other:?}"),
+            }
+        }
+        assert_eq!(
+            deep_link(App::Ksav, "KSAV://insert?packet=%7B%7D"),
+            Some(Errand::Insert {
+                packet: "{}".to_string()
+            })
+        );
+        // Still not the sibling's scheme, however it is cased.
+        assert_eq!(deep_link(App::Girsa, "KSAV://insert?packet=%7B%7D"), None);
+        // And not a scheme that merely starts the same way.
+        assert_eq!(deep_link(App::Girsa, "girsaX:bavli/berakhot/2a:1"), None);
+        assert_eq!(deep_link(App::Girsa, "girsa"), None);
+    }
+
+    /// A corrupted link is refused, not turned into a different valid-looking ref.
+    ///
+    /// `from_utf8_lossy` turned `%FF` into U+FFFD **silently**, so a link corrupted
+    /// in transit became a different ref that still looked like one. In the crate
+    /// whose governing rule is that a wrong ref is worse than no ref, a replacement
+    /// character inside a segment id is the exact failure it exists to prevent: a
+    /// ref that resolves, opens a page, and opens the wrong page.
+    #[test]
+    fn a_link_that_is_not_utf8_is_refused_rather_than_repaired() {
+        // A lone 0xFF is not valid UTF-8 in any position.
+        assert_eq!(deep_link(App::Girsa, "girsa://search?q=%FF"), None);
+        assert_eq!(
+            deep_link(App::Girsa, "girsa://open?ref=bavli%2Fberakhot%FF"),
+            None
+        );
+        assert_eq!(deep_link(App::Ksav, "ksav://insert?packet=%FF%FE"), None);
+        // A truncated multi-byte sequence, which is what a cut Hebrew link looks
+        // like: `%D7` is the lead byte of every letter in the alphabet.
+        assert_eq!(deep_link(App::Girsa, "girsa://search?q=%D7"), None);
+        // Nothing that comes back carries a replacement character, ever.
+        for url in [
+            "girsa://search?q=%FF",
+            "girsa://open?ref=%D7%91%FF",
+            "girsa://search?q=%C0%80",
+        ] {
+            let read = deep_link(App::Girsa, url);
+            assert!(read.is_none(), "{url} was repaired into {read:?}");
+        }
+        // And valid Hebrew still reads, so this is a refusal and not a regression.
+        assert_eq!(
+            deep_link(
+                App::Girsa,
+                "girsa://search?q=%D7%91%D7%A8%D7%9B%D7%95%D7%AA"
+            ),
+            Some(Errand::Search {
+                phrase: "ברכות".to_string()
+            })
+        );
     }
 }

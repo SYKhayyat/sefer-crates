@@ -66,6 +66,21 @@ pub const TOKEN_HEADER: &str = "X-Girsa-Token";
 /// second of nothing is a window that has frozen for no reason they can see.
 const PATIENCE: Duration = Duration::from_millis(400);
 
+/// How long the *whole* exchange may take.
+///
+/// [`PATIENCE`] is per read, which a sender producing one byte every 300 ms never
+/// trips — so it bounded nothing at all about how long `send` could take or how
+/// much it could accumulate. A total deadline is the thing that actually holds.
+const WHOLE_EXCHANGE: Duration = Duration::from_secs(5);
+
+/// The largest answer a client will read.
+///
+/// The mirror of `desk::MAX_BODY`, and here rather than imported from it because
+/// `desk` is behind the `serve` feature: a build that only sends must still cap
+/// what it reads. The two numbers are the same and mean the same thing — an errand
+/// between these two applications carries a passage of a sefer, not a file.
+pub const MAX_ANSWER: usize = 1024 * 1024;
+
 /// The two applications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -151,14 +166,38 @@ impl Endpoint {
     /// # Errors
     ///
     /// If the directory cannot be made or the file cannot be written.
+    /// The file is **created** with the right mode rather than chmodded into it.
+    ///
+    /// It used to be `fs::write` followed by `set_permissions(0o600)`. On Unix that
+    /// means the file is born `0o666 & !umask` — 0644 on a stock system — and for
+    /// the length of one syscall any local user could read the token. The module
+    /// note says the token is *"published in a file only the user can read"*, and
+    /// for that window it was not.
+    ///
+    /// `create_new` means an existing file is not reopened, because reopening one
+    /// keeps whatever mode it already had — including a mode somebody else set.
+    /// A stale file is removed first and the create is retried once.
     pub fn publish(&self) -> std::io::Result<()> {
         let path = Self::path(self.app);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
+            // 0700, and traversable by nobody else. `create_dir_all` gives 0755,
+            // so the directory holding the token was readable and listable by
+            // every user on the machine even once the file itself was not.
+            restrict_dir_to_owner(dir)?;
         }
-        std::fs::write(&path, serde_json::to_vec_pretty(self)?)?;
-        restrict_to_owner(&path)?;
-        Ok(())
+        let body = serde_json::to_vec_pretty(self)?;
+        match write_new_private(&path, &body) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                // A file from a previous run, or from a crash. Taking it away and
+                // creating our own is the only way to be sure of the mode; writing
+                // into it would inherit whatever mode it arrived with.
+                std::fs::remove_file(&path)?;
+                write_new_private(&path, &body)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// Read the sibling's endpoint file, if it has one.
@@ -294,8 +333,58 @@ fn ask(
             break;
         }
     }
+    // The answer is capped, and the whole exchange has a deadline.
+    //
+    // This was `read_to_string` with no limit at all, guarded only by a 400 ms
+    // *per-read* timeout — which a sender that produces one byte every 300 ms
+    // never trips. Composed with the leaked-port defect above, something that took
+    // a released port could grow this `String` without bound while `presence()` was
+    // being called *"while a reader is looking at a menu"*. Two things close it:
+    // the same ceiling the desk applies to a request, and a total deadline as well
+    // as a per-read one.
     let mut answer = String::new();
-    reader.read_to_string(&mut answer)?;
+    let mut limited = reader.take(MAX_ANSWER as u64 + 1);
+    let deadline = std::time::Instant::now() + WHOLE_EXCHANGE;
+    let mut chunk = [0u8; 8192];
+    let mut bytes = Vec::new();
+    loop {
+        if std::time::Instant::now() > deadline {
+            return Err(PostError::Unreachable {
+                app,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "the answer did not finish arriving",
+                ),
+            });
+        }
+        let read = limited.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        if bytes.len() > MAX_ANSWER {
+            return Err(PostError::Refused {
+                app,
+                status: 413,
+                body: format!("the answer is over {MAX_ANSWER} bytes"),
+            });
+        }
+    }
+    // `from_utf8`, not `from_utf8_lossy`, for the reason `link::field` gives: an
+    // answer that is not text is a transport fault, and a quote silently repaired
+    // with replacement characters is a quote that looks whole and is not.
+    match String::from_utf8(bytes) {
+        Ok(text) => answer.push_str(&text),
+        Err(e) => {
+            return Err(PostError::Unreachable {
+                app,
+                source: std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("the answer is not text: {e}"),
+                ),
+            })
+        }
+    }
 
     if (200..300).contains(&status) {
         Ok(answer)
@@ -356,18 +445,54 @@ fn home() -> PathBuf {
     base.join("girsa")
 }
 
-/// Keep the token to the user who minted it.
+/// Create the token file private, and write it. Never widens an existing one.
+///
+/// The mode goes on the `open`, not on a `set_permissions` afterwards. There is no
+/// window: the file does not exist, and then it exists at 0600. Fails with
+/// `AlreadyExists` rather than reopening, because reopening keeps the mode the file
+/// already had and the caller has to decide whether that file should be there.
 #[cfg(unix)]
-fn restrict_to_owner(path: &std::path::Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+fn write_new_private(path: &std::path::Path, body: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    file.write_all(body)?;
+    file.sync_all()
 }
 
 /// On Windows the file inherits the directory's ACL, which is the user's own
-/// `%LOCALAPPDATA%`. There is no mode to set.
+/// `%LOCALAPPDATA%`. There is no mode to set — but `create_new` still matters, so
+/// an existing file with somebody else's ACL is not written into.
+#[cfg(not(unix))]
+fn write_new_private(path: &std::path::Path, body: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    file.write_all(body)?;
+    file.sync_all()
+}
+
+/// 0700 on the directory the token lives in.
+///
+/// `create_dir_all` gives 0755, so the directory was listable and traversable by
+/// every user on the machine. A directory nobody else can enter is the other half
+/// of "a file only you can read".
+#[cfg(unix)]
+fn restrict_dir_to_owner(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+}
+
+/// On Windows the directory is inside the user's own profile already.
 #[cfg(not(unix))]
 #[allow(clippy::unnecessary_wraps)]
-fn restrict_to_owner(_path: &std::path::Path) -> std::io::Result<()> {
+fn restrict_dir_to_owner(_dir: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 

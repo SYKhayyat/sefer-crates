@@ -632,6 +632,11 @@ impl Reader<'_> {
             self.at += 1;
             to = self.chars.get(self.at).map_or(self.src.len(), |(i, _)| *i);
         }
+        // Lossy in type only, and checked when the lossy-decode family was swept in
+        // B11: `from` and `to` both come from `char_indices` over this same
+        // `&str`'s bytes, so they are character boundaries by construction and there
+        // is nothing for a replacement character to stand in for. Left as it is
+        // rather than turned into a fallible read that cannot fail.
         String::from_utf8_lossy(self.src.get(from..to).unwrap_or_default()).into_owned()
     }
 }

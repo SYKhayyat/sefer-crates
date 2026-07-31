@@ -26,7 +26,7 @@ crates exist to prevent in the first place.
 
 Three things pay it, and none of them are optional:
 
-1. **Exact version pins.** Both apps depend on `=0.3.0`, not `^0.2`. Taking a
+1. **Exact version pins.** Both apps depend on `=0.5.0`, not `^0.5`. Taking a
    new version is a deliberate act on each side.
 2. **CI here builds both dependents.** `tools/check-dependents.sh`, run by
    `.github/workflows/ci.yml`, builds and tests Girsa and Ksav against the
@@ -34,6 +34,82 @@ Three things pay it, and none of them are optional:
    rather than weeks later inside an app.
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
+
+## 0.5.0 — the transport's security model, and thousands
+
+Three security defects in `girsa-post` and two correctness ones, from the
+2026-07-30 grade. **Breaking:** `Desk::serve` takes `&mut self`.
+
+- **`Desk::drop` left the listener bound.** `serve` cloned the `Arc<Server>` into
+  a detached thread; dropping the `Desk` dropped one `Arc` and the thread held the
+  other, so the endpoint file was withdrawn and the port stayed open — a live
+  loopback listener with a token written down nowhere, reachable by anything that
+  scans ports and **not revocable**, because there was nothing left to revoke.
+  The whole model of this crate is *"a token in a file only you can read"*, and a
+  listener outside that model is the one thing it cannot survive. `Drop` now calls
+  `Server::unblock` and joins, so the handle has to be kept and `serve` takes
+  `&mut self`. That is the breaking change, and it is one word at each of the two
+  call sites.
+- **The token file was created world-readable and then chmodded.** `fs::write`
+  followed by `set_permissions(0o600)` means the file is born `0o666 & !umask` —
+  0644 on a stock system — with a window in which any local user could read the
+  token. It is now created at 0600 with `create_new`, and the directory holding it
+  is 0700 rather than `create_dir_all`'s 0755.
+- **A body of unknown length was half-accepted.** `body_length().unwrap_or(0)`
+  reads chunked-with-no-`Content-Length` as zero, so it passed the 413 check and
+  was then silently cut by `take(MAX_BODY)`. For the plain-text bodies this
+  crate's own tests use, a truncated quote arrives looking like a complete one.
+  Now a `411`. `Content-Length` is also no longer trusted: the read takes one byte
+  past the ceiling and refuses if it gets there.
+- **The client capped responses at nothing.** `read_to_string` with no limit,
+  guarded only by a 400 ms *per-read* timeout, which a sender producing a byte
+  every 300 ms never trips. There is now a `MAX_ANSWER` mirroring the desk's
+  `MAX_BODY` and a `WHOLE_EXCHANGE` deadline as well as the per-read one.
+- **Deep links: the scheme is case-insensitive and the decode is not lossy.** RFC
+  3986 makes a scheme case-insensitive and PDF viewers normalise it, so
+  `GIRSA:bavli/berakhot/2a:1` was refused as *"a misconfigured machine"*. And
+  `from_utf8_lossy` turned `%FF` into U+FFFD silently, so a corrupted link became a
+  *different, valid-looking* ref — in the crate whose governing rule is that a
+  wrong ref is worse than no ref. Both fixed; `decode` returns `Option`.
+- **`girsa-ref`: numbers past a thousand are written in Hebrew.** `to_hebrew` gave
+  up at 1,000 and returned Arabic digits, switching alphabets inside a citation
+  without saying so, in a formatter whose promise is *"how it is written in a
+  sefer"*. The reasoning behind the ceiling was sound and its premise was wrong:
+  measured over the real corpus, **43,076 of 5,000,545 addresses (0.86%) carry a
+  component ≥ 1,000**, the first `girsa:bavli/maadaney-yom-tov-on-berakhot/1000`.
+  `parse_hebrew` had always read `א'תתקצ"ט`; `to_hebrew` now writes it. A *round*
+  thousand still goes in digits, because 1,000 and 1 are both `א'` in the notation
+  and this crate refuses ambiguity rather than guessing at it —
+  `is_written_in_digits` says which of the two a number gets. The round-trip test
+  runs to 20,000.
+
+## 0.4.0 — a Ksav document read for its shape, not only its words
+
+`girsa_ksav::read` turns a document into blocks — heading, paragraph, quote, list
+item, table row, footnote — and `to_text` is that reading rendered flat, so there
+is one parser and not two.
+
+`to_text` used to take the command names and their arguments off and keep what
+was between the brackets. Measured against Ksav's own sample document, that lost:
+
+```
+#כותרת1[מבוא]                  → "מבוא" as body text, not a heading
+#רשימה(פריט[א], פריט[ב])        → nothing at all
+#טבלה(עמודות: 2, תא[א], תא[ב])  → nothing at all
+סוף#הערה[הערה].                 → "סוף הערה ." — spliced into the sentence
+```
+
+A list's items and a table's cells live in the *arguments* — Ksav writes
+`#רשימה(פריט[…])`, not `#רשימה[…]` — and arguments were skipped because arguments
+are usually settings. So a document's lists and tables were absent from anything
+reading it, and it did not look like a loss.
+
+Of Ksav's 104 commands it knows the forty that are structure. Everything else is
+inline and its content is kept, so a new style command in Ksav needs no change
+here and **cannot lose a word by being unknown** — which is exactly how the tables
+were lost. Blocks come out flat in reading order, with an item carrying its depth
+and a note carrying the marker left in the text; a faithful tree would be one
+nothing addressing it could name.
 
 ## 0.3.0 — `girsa-cite`, `girsa-post`, and a whole sefer you can point at
 

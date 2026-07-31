@@ -58,8 +58,26 @@ impl Reply {
 
 /// An open desk: a listener on loopback, and the endpoint file that points at
 /// it.
+///
+/// # Closing it closes the listener
+///
+/// This was once not true and it was the one defect in this crate that put the
+/// whole security model out of reach. `serve` cloned the `Arc<Server>` into a
+/// detached thread; dropping the `Desk` dropped one `Arc` and the thread held the
+/// other, so `Drop` withdrew the endpoint file and **left the port bound** — a
+/// live loopback listener with a token that was no longer written down anywhere.
+/// Reachable by anything that scans ports, and not revocable, because there was
+/// nothing left to revoke.
+///
+/// So the join handle is kept. `Drop` calls `Server::unblock`, which makes
+/// `incoming_requests` return, and then joins the thread — after which the port is
+/// closed because the last `Arc` is gone.
 pub struct Desk {
     server: Arc<Server>,
+    /// The serving thread, so `Drop` can wait for it rather than detach it.
+    ///
+    /// `None` before `serve` is called, and after `Drop` has taken it.
+    serving: Option<std::thread::JoinHandle<()>>,
     token: String,
     app: App,
     /// The *application's* version, not this crate's. What presence shows is
@@ -101,6 +119,7 @@ impl Desk {
 
         Ok(Self {
             server: Arc::new(server),
+            serving: None,
             token,
             app,
             version: version.to_string(),
@@ -122,7 +141,7 @@ impl Desk {
     /// called on the serving thread, so a handler that blocks blocks the next
     /// request — which for two errands a minute is exactly the right trade
     /// against a thread pool nobody can reason about.
-    pub fn serve<F>(&self, handle: F)
+    pub fn serve<F>(&mut self, handle: F)
     where
         F: Fn(&str, &str) -> Reply + Send + Sync + 'static,
     {
@@ -130,25 +149,48 @@ impl Desk {
         let token = self.token.clone();
         let app = self.app;
         let version = self.version.clone();
-        std::thread::Builder::new()
+        match std::thread::Builder::new()
             .name(format!("{app}-post"))
             .spawn(move || {
                 for request in server.incoming_requests() {
                     answer(request, &token, app, &version, &handle);
                 }
-            })
+            }) {
+            // Kept, not detached. A detached thread holds the other `Arc<Server>`
+            // and the port with it, which is how dropping a desk came to leave a
+            // live listener behind.
+            Ok(handle) => self.serving = Some(handle),
             // A desk that cannot get a thread is a desk that is not open; the
             // caller already carries on without one.
-            .map(|_| ())
-            .unwrap_or_else(|e| eprintln!("the post desk did not open: {e}"));
+            Err(e) => eprintln!("the post desk did not open: {e}"),
+        }
+    }
+
+    /// Stop answering, and wait until it has stopped.
+    ///
+    /// Separate from `Drop` so a caller that wants to know the port is free before
+    /// doing something else can ask; `Drop` calls it.
+    pub fn close(&mut self) {
+        // `unblock` makes `incoming_requests` return, which ends the loop and
+        // drops the thread's `Arc<Server>`.
+        self.server.unblock();
+        if let Some(handle) = self.serving.take() {
+            // A handler that has genuinely wedged must not wedge the shutdown too.
+            // The join is what makes the port observably free, and a panicked
+            // serving thread is not a reason to panic here.
+            let _ = handle.join();
+        }
+        Endpoint::withdraw(self.app);
     }
 }
 
 impl Drop for Desk {
     fn drop(&mut self) {
-        // The file outliving the listener is exactly what `Presence::Stale`
-        // exists for, and it is better not to need it.
-        Endpoint::withdraw(self.app);
+        // Both halves, in this order. The endpoint file outliving the listener is
+        // what `Presence::Stale` exists for and it is better not to need it; the
+        // *listener* outliving the file is outside the security model altogether,
+        // because its token is then written down nowhere and cannot be revoked.
+        self.close();
     }
 }
 
@@ -175,20 +217,44 @@ where
         return;
     }
 
-    let length = request.body_length().unwrap_or(0);
-    if length > MAX_BODY {
-        let _ = request.respond(response(Reply::refused(413, "that is not a quote")));
-        return;
-    }
+    // A body whose length is not declared is refused, not half-accepted.
+    //
+    // This was `body_length().unwrap_or(0)`, and `None` is what a chunked body with
+    // no `Content-Length` gives. Zero passed the 413 check and the body was then
+    // silently cut by `take(MAX_BODY)`. For a JSON packet that fails to parse
+    // afterwards, no harm. For the plain-text bodies this crate's own tests use, a
+    // truncated quote arrives looking like a complete one — and a quote that is
+    // quietly short is the worst thing this transport can deliver.
+    let length = match request.body_length() {
+        Some(length) if length > MAX_BODY => {
+            let _ = request.respond(response(Reply::refused(413, "that is not a quote")));
+            return;
+        }
+        Some(length) => length,
+        None if request.method() == &Method::Get => 0,
+        None => {
+            let _ = request.respond(response(Reply::refused(
+                411,
+                "say how long the body is: this desk does not read a body of unknown length",
+            )));
+            return;
+        }
+    };
 
     let mut body = String::with_capacity(length);
+    // One byte past the ceiling, so a `Content-Length` that lied is caught by the
+    // read rather than trusted. `Content-Length` is the sender's claim, not a fact.
     if request
         .as_reader()
-        .take(MAX_BODY as u64)
+        .take(MAX_BODY as u64 + 1)
         .read_to_string(&mut body)
         .is_err()
     {
         let _ = request.respond(response(Reply::refused(400, "the body is not text")));
+        return;
+    }
+    if body.len() > MAX_BODY {
+        let _ = request.respond(response(Reply::refused(413, "that is not a quote")));
         return;
     }
 
@@ -239,7 +305,7 @@ mod tests {
 
     /// A desk that answers one errand, so the tests are about the transport.
     fn desk(app: App) -> Desk {
-        let desk = Desk::open(app, "test").expect("binds loopback");
+        let mut desk = Desk::open(app, "test").expect("binds loopback");
         desk.serve(|path, body| match path {
             "/echo" => Reply::ok(body.to_string()),
             _ => Reply::refused(404, "no such errand"),
@@ -267,7 +333,7 @@ mod tests {
         let _alone = alone();
         // Localhost is not private: every process on the machine can reach the
         // port, and so can a web page.
-        let desk = Desk::open(App::Girsa, "test").expect("binds");
+        let mut desk = Desk::open(App::Girsa, "test").expect("binds");
         desk.serve(|_, _| Reply::ok("should never be reached"));
 
         let stranger = Endpoint {
@@ -307,5 +373,120 @@ mod tests {
             assert!(Endpoint::read(App::Ksav).is_some());
         }
         assert_eq!(presence(App::Ksav), Presence::NotRunning);
+    }
+
+    /// Whether anything is still listening on a port.
+    fn still_bound(port: u16) -> bool {
+        std::net::TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+            std::time::Duration::from_millis(300),
+        )
+        .is_ok()
+    }
+
+    /// **The whole security model of this crate rests on this one.**
+    ///
+    /// It is *"a token in a file only you can read"*. Dropping a `Desk` withdrew
+    /// the file and left the listener bound, so every `Desk::open` in a process
+    /// leaked a live loopback port that still answered `/health` and every errand
+    /// with a token that was no longer written down anywhere — reachable by
+    /// anything that scans ports, and **not revocable**, because there was nothing
+    /// left to revoke.
+    ///
+    /// The comment on `Drop` said *"the file outliving the listener is exactly what
+    /// `Presence::Stale` exists for, and it is better not to need it."* The code
+    /// produced the inverse: the listener outlived the file.
+    #[test]
+    fn dropping_a_desk_closes_its_listener_and_does_not_leak_a_port() {
+        let _alone = alone();
+        let port = {
+            let desk = desk(App::Ksav);
+            let port = desk.port();
+            assert!(still_bound(port), "it is listening while it is open");
+            port
+        };
+        assert!(
+            !still_bound(port),
+            "port {port} is still bound after the desk was dropped, \
+             with a token that is no longer in any file"
+        );
+    }
+
+    /// Two desks, and the first one gone means gone.
+    ///
+    /// The probe that found this opened a second desk and observed *two live
+    /// listeners, one token file* — so the second desk's token was the only one
+    /// written down, and the first port answered anything sent to it by whoever
+    /// still knew the old token.
+    #[test]
+    fn a_second_desk_does_not_leave_the_first_one_answering() {
+        let _alone = alone();
+        let first_port = {
+            let first = desk(App::Girsa);
+            first.port()
+        };
+        let second = desk(App::Girsa);
+        assert_ne!(second.port(), first_port, "the OS picked a fresh port");
+        assert!(still_bound(second.port()), "the second desk is open");
+        assert!(
+            !still_bound(first_port),
+            "the first desk's port {first_port} is still answering"
+        );
+        Endpoint::withdraw(App::Girsa);
+    }
+
+    /// A body whose length is unknown is refused, not half-accepted.
+    ///
+    /// `body_length().unwrap_or(0)` reads `None` — which is what a chunked body
+    /// with no `Content-Length` gives — as zero, so it passed the 413 check and was
+    /// then silently truncated by `take(MAX_BODY)`. For a JSON packet that fails to
+    /// parse afterwards, fine. For the plain-text bodies this crate's own tests
+    /// use, **a truncated quote arrives as a complete one**. Refuse it or accept
+    /// it; do not half-accept it.
+    #[test]
+    fn a_body_of_unknown_length_is_refused_rather_than_truncated() {
+        use std::io::Write as _;
+        let _alone = alone();
+        let desk = desk(App::Ksav);
+        let token = Endpoint::read(App::Ksav).expect("published").token;
+
+        // Written by hand, because no client in this crate can send a chunked
+        // body — which is exactly why the hole was never noticed.
+        let mut socket =
+            std::net::TcpStream::connect(("127.0.0.1", desk.port())).expect("connects");
+        // A read timeout, because a keep-alive connection never ends on its own and
+        // `read_to_string` would wait for a close that is not coming. The first
+        // version of this test hung the whole suite for exactly that reason.
+        socket
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .expect("a timeout");
+        let quote = "ראוי לכל ירא שמים";
+        write!(
+            socket,
+            "POST /echo HTTP/1.1\r\nHost: 127.0.0.1\r\n{TOKEN_HEADER}: {token}\r\n\
+             Transfer-Encoding: chunked\r\n\r\n{:x}\r\n{quote}\r\n0\r\n\r\n",
+            quote.len()
+        )
+        .expect("writes");
+        socket.flush().expect("flushes");
+        let mut answer = Vec::new();
+        // Whatever arrives inside the timeout. A partial read is enough: the status
+        // line is the first thing on the wire.
+        let mut buffer = [0u8; 4096];
+        while let Ok(n) = std::io::Read::read(&mut socket, &mut buffer) {
+            if n == 0 {
+                break;
+            }
+            answer.extend_from_slice(&buffer[..n]);
+            if answer.len() > 2048 {
+                break;
+            }
+        }
+        let answer = String::from_utf8_lossy(&answer);
+        assert!(
+            answer.contains(" 411 ") || answer.contains(" 413 "),
+            "a body with no declared length must be refused: {answer:?}"
+        );
+        Endpoint::withdraw(App::Ksav);
     }
 }

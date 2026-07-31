@@ -139,37 +139,80 @@ pub fn parse(s: &str) -> Option<u32> {
     parse_hebrew(trimmed)
 }
 
-/// Write a number the way a sefer does. 121 → `קכ"א`.
+/// The value at which the thousands notation starts.
+pub const THOUSAND: u32 = 1000;
+
+/// Write a number the way a sefer does. 121 → `קכ"א`, 1,999 → `א'תתקצ"ט`.
 ///
 /// The gershayim goes before the last letter, or a geresh after a single one,
 /// which is how it is printed. `15` and `16` come out `טו` and `טז` because the
 /// alternative spells a Name.
 ///
-/// # A round thousand is written as digits, deliberately
+/// # Thousands
 ///
-/// The notation for a thousand is the letter for *how many* thousands followed
-/// by a geresh — so 1,000 is `א'`, which is also how 1 is written. In prose a
-/// reader disambiguates from context; a ref has no context, and a citation that
-/// might mean siman 1 or siman 1,000 is exactly the ambiguity this crate
-/// refuses to resolve by guessing.
+/// The notation is the letter for *how many* thousands, a geresh, then the
+/// remainder: `א'תתקצ"ט` is 1,999. `parse_hebrew` has always read that form; this
+/// function used to give up at 1,000 and return the Arabic digits, so a citation
+/// went from `סימן תתקצ"ט` to `סימן 1000` with no indication that the alphabet had
+/// changed underneath it — in a formatter whose whole promise is *"how it is
+/// written in a sefer"*.
 ///
-/// It costs nothing to avoid: the longest masechta is 176 dafim and the largest
-/// siman count in the corpus is Orach Chayim's 697, so no address level ever
-/// reaches four digits. Above 999 the digits are written out, which is
-/// unambiguous and round-trips.
+/// **The reasoning that justified giving up was sound and its premise was wrong.**
+/// It said no address level ever reaches four digits, because the longest masechta
+/// is 176 dafim and the largest siman count in the corpus is Orach Chayim's 697.
+/// Measured over the real corpus instead: **43,076 of 5,000,545 addresses (0.86%)
+/// carry a component ≥ 1,000**, the first of them
+/// `girsa:bavli/maadaney-yom-tov-on-berakhot/1000`.
+///
+/// # A round thousand is still written as digits, and that is not a lapse
+///
+/// 1,000 in the notation is `א'` — which is also how 1 is written. Hebrew does not
+/// disambiguate the two; a reader uses context, and a ref has none. This crate's
+/// governing rule is that a wrong ref is worse than no ref, and a citation that
+/// might mean siman 1 or siman 1,000 is precisely the ambiguity it refuses to
+/// resolve by guessing. So a round thousand — and anything from a million up, where
+/// the thousands count would itself need the notation — is written in digits, which
+/// is unambiguous and round-trips. That is one address in a thousand of the 43,076
+/// rather than all of them.
+///
+/// [`is_written_in_digits`] answers *which* of the two a number gets, so a caller
+/// that wants to say so can.
 #[must_use]
 pub fn to_hebrew(n: u32) -> String {
     if n == 0 {
         return String::new();
     }
-    if n >= 1000 {
+    if is_written_in_digits(n) {
         return n.to_string();
     }
+    if n < THOUSAND {
+        return with_marks(&to_bare_letters(n));
+    }
+    // The geresh resets the descent, which is what lets `parse_hebrew` read the two
+    // halves separately — and it has read them separately all along.
+    format!(
+        "{}'{}",
+        to_bare_letters(n / THOUSAND),
+        with_marks(&to_bare_letters(n % THOUSAND))
+    )
+}
 
-    let letters = to_bare_letters(n);
+/// Whether a number comes out as digits rather than as letters, and why.
+///
+/// Two cases, both of them ambiguity rather than laziness: a round thousand reads
+/// as its own thousands count (1,000 and 1 are both `א'`), and from a million up
+/// the thousands count would need the notation itself, which nests and stops being
+/// readable.
+#[must_use]
+pub fn is_written_in_digits(n: u32) -> bool {
+    n >= THOUSAND && (n % THOUSAND == 0 || n / THOUSAND >= THOUSAND)
+}
 
-    // The mark lands inside the numeral, which is what distinguishes it from a
-    // word: `קכ"א` is a number, `קכא` is a typo.
+/// The mark that distinguishes a numeral from a word.
+///
+/// `קכ"א` is a number, `קכא` is a typo. Inside the numeral for two letters or
+/// more, after it for one.
+fn with_marks(letters: &str) -> String {
     let chars: Vec<char> = letters.chars().collect();
     match chars.len() {
         0 => String::new(),
@@ -270,12 +313,60 @@ mod tests {
 
     #[test]
     fn every_number_a_sefer_could_have_survives_a_round_trip() {
-        // Shulchan Arukh Orach Chayim runs to siman 697 and 4,171 se'ifim in
-        // total; the longest masechta is 176 dafim. 5,000 is well past anything
-        // a citation can carry.
-        for n in 1..=5000u32 {
+        // The four-digit range is not hypothetical. Measured over the real corpus,
+        // 43,076 of 5,000,545 addresses carry a component ≥ 1,000, the first of
+        // them `girsa:bavli/maadaney-yom-tov-on-berakhot/1000`. Twenty thousand
+        // covers every one of them with room to spare.
+        for n in 1..=20_000u32 {
             let written = to_hebrew(n);
             assert_eq!(parse(&written), Some(n), "{n} was written {written}");
         }
+    }
+
+    /// Above a thousand the citation stays in Hebrew, which it did not.
+    ///
+    /// `to_hebrew` gave up at 1,000 and returned the Arabic digits, so a citation
+    /// went from `מעדני יום טוב על ברכות סימן תתקצ"ט` to `… סימן 1000` with the
+    /// alphabet changing underneath it and nothing saying so.
+    #[test]
+    fn a_number_past_a_thousand_is_still_written_in_letters() {
+        assert_eq!(to_hebrew(999), "תתקצ\"ט");
+        assert_eq!(to_hebrew(1001), "א'א'");
+        assert_eq!(to_hebrew(1005), "א'ה'");
+        assert_eq!(to_hebrew(1121), "א'קכ\"א");
+        assert_eq!(to_hebrew(1999), "א'תתקצ\"ט");
+        assert_eq!(to_hebrew(2500), "ב'ת\"ק");
+        assert_eq!(to_hebrew(5786), "ה'תשפ\"ו"); // this year, as a sefer writes it
+                                                 // And no Latin digit anywhere in any of them.
+        for n in [1001, 1005, 1121, 1999, 2500, 5786] {
+            let written = to_hebrew(n);
+            assert!(
+                !written.chars().any(char::is_numeric),
+                "{n} came out as {written}"
+            );
+        }
+    }
+
+    /// The one case that stays in digits, and the reason it does.
+    ///
+    /// 1,000 in the notation is `א'`, which is also how 1 is written. Hebrew does
+    /// not disambiguate them and a ref has no context to disambiguate from, so this
+    /// crate refuses rather than guesses — the same rule that stops it inventing an
+    /// abbreviation or a level word.
+    #[test]
+    fn a_round_thousand_is_ambiguous_and_is_therefore_written_in_digits() {
+        assert_eq!(to_hebrew(1), "א'");
+        assert_eq!(parse("א'"), Some(1));
+        assert!(is_written_in_digits(1000));
+        assert_eq!(to_hebrew(1000), "1000");
+        assert_eq!(to_hebrew(2000), "2000");
+        assert_eq!(parse("1000"), Some(1000));
+        // Not the round thousands, and not below the ceiling.
+        assert!(!is_written_in_digits(999));
+        assert!(!is_written_in_digits(1001));
+        // And a million up, where the thousands count would need the notation
+        // itself and stop being readable.
+        assert!(is_written_in_digits(1_000_001));
+        assert_eq!(to_hebrew(1_000_001), "1000001");
     }
 }
