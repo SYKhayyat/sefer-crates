@@ -375,13 +375,40 @@ mod tests {
         assert_eq!(presence(App::Ksav), Presence::NotRunning);
     }
 
-    /// Whether anything is still listening on a port.
-    fn still_bound(port: u16) -> bool {
+    /// Whether anything is listening on a port right now.
+    fn bound_now(port: u16) -> bool {
         std::net::TcpStream::connect_timeout(
             &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
             std::time::Duration::from_millis(300),
         )
         .is_ok()
+    }
+
+    /// Whether a port is *still* bound after giving it a moment to close.
+    ///
+    /// The wait is not politeness, it is correctness about what `tiny_http`
+    /// guarantees. `Server::drop` sets its close flag and connects to itself to wake
+    /// the accept thread — and it does **not join** that thread, which is the thread
+    /// that owns the listening socket. So the socket closes shortly after the drop
+    /// rather than during it.
+    ///
+    /// The first version of this test asserted the instant, passed on Windows and
+    /// failed on Linux for exactly that reason — which is BUILDER.md W9's trap, *a
+    /// result from one OS is not evidence*, arriving in a test rather than in a
+    /// screenshot.
+    ///
+    /// The security property is not *the socket handle is closed by now*. It is
+    /// **nothing answers an errand on that port any more**, which is what a leaked
+    /// listener with a token in no file would go on doing forever.
+    fn still_bound(port: u16) -> bool {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < until {
+            if !bound_now(port) {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        true
     }
 
     /// **The whole security model of this crate rests on this one.**
@@ -402,7 +429,7 @@ mod tests {
         let port = {
             let desk = desk(App::Ksav);
             let port = desk.port();
-            assert!(still_bound(port), "it is listening while it is open");
+            assert!(bound_now(port), "it is listening while it is open");
             port
         };
         assert!(
@@ -427,7 +454,7 @@ mod tests {
         };
         let second = desk(App::Girsa);
         assert_ne!(second.port(), first_port, "the OS picked a fresh port");
-        assert!(still_bound(second.port()), "the second desk is open");
+        assert!(bound_now(second.port()), "the second desk is open");
         assert!(
             !still_bound(first_port),
             "the first desk's port {first_port} is still answering"
