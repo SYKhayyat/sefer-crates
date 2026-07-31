@@ -59,7 +59,7 @@
 //! cannot read is a citation this system cannot follow. See the test of that
 //! name.
 
-#![doc(html_root_url = "https://docs.rs/girsa-cite/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/girsa-cite/0.5.0")]
 
 use girsa_ref::address::Level;
 use girsa_ref::{daf, numerals, Address, Ref};

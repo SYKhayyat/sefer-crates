@@ -31,7 +31,7 @@
 //! thousands of characters from the quote, with the preview blank and nothing
 //! pointing at what caused it.
 
-#![doc(html_root_url = "https://docs.rs/girsa-ksav/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/girsa-ksav/0.5.0")]
 
 pub mod read;
 

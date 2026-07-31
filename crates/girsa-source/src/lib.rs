@@ -46,7 +46,7 @@
 //! know, and the citation renders looking perfectly reasonable and slightly
 //! wrong. In a printed sefer.
 
-#![doc(html_root_url = "https://docs.rs/girsa-source/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/girsa-source/0.5.0")]
 
 use serde::{Deserialize, Serialize};
 

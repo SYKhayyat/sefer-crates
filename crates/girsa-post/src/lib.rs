@@ -6,9 +6,16 @@
 //! ```text
 //! Girsa ──POST /insert──▶ Ksav      a source, on its way into a document
 //! Ksav  ──POST /open  ──▶ Girsa     a citation, on its way to the page it names
-//! Ksav  ──GET  /cite  ──▶ Girsa     print this ref in that style
+//! Ksav  ──POST /cite  ──▶ Girsa     print this ref in that style
 //! either ─GET  /health──▶ other     is my sibling there?
 //! ```
+//!
+//! **The method is not a choice either side makes.** [`send`] uses `POST` when it
+//! was given a body and `GET` when it was not, so an errand that carries something
+//! is a `POST` and an errand that only asks is a `GET`. That is why `/cite` is a
+//! `POST` — it carries the ref and the style — and why this diagram once said `GET`
+//! while the sefer-crates README said `POST`, with both of them right about
+//! different calls and neither saying the rule.
 //!
 //! # Nothing leaves the machine
 //!
@@ -41,7 +48,7 @@
 //! the reason, which is what the window shows instead of an affordance that
 //! would do nothing.
 
-#![doc(html_root_url = "https://docs.rs/girsa-post/0.4.0")]
+#![doc(html_root_url = "https://docs.rs/girsa-post/0.5.0")]
 
 use std::fmt;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -163,9 +170,6 @@ impl Endpoint {
 
     /// Write it down, so the sibling can find this application.
     ///
-    /// # Errors
-    ///
-    /// If the directory cannot be made or the file cannot be written.
     /// The file is **created** with the right mode rather than chmodded into it.
     ///
     /// It used to be `fs::write` followed by `set_permissions(0o600)`. On Unix that
@@ -177,6 +181,10 @@ impl Endpoint {
     /// `create_new` means an existing file is not reopened, because reopening one
     /// keeps whatever mode it already had — including a mode somebody else set.
     /// A stale file is removed first and the create is retried once.
+    ///
+    /// # Errors
+    ///
+    /// If the directory cannot be made or the file cannot be written.
     pub fn publish(&self) -> std::io::Result<()> {
         let path = Self::path(self.app);
         if let Some(dir) = path.parent() {
