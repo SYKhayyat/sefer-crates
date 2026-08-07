@@ -81,6 +81,76 @@ pub struct Version {
     pub provenance: String,
 }
 
+/// Which characters of the quoted place this quote actually is.
+///
+/// # Why the ref is not enough, and what it cost to find that out
+///
+/// A ref names **places** — `שו"ע או"ח א':א'`, or a span from one to another.
+/// A reader highlighting half a se'if and pressing Ctrl+C gets exactly the
+/// words they highlighted, and the packet said so in `text` and said nothing
+/// about *which* words those were.
+///
+/// So the promise that makes the whole two-application system worth building —
+/// regenerate every quote against a corrected edition without touching the
+/// prose (spec.md §7, §10.2) — regenerated **the whole se'if** for any partial
+/// selection. Two sentences in the README, both true, contradicting each other
+/// at the regeneration step: *only the highlighted part goes*, and *citations
+/// stay alive*.
+///
+/// # Characters, of what
+///
+/// Characters — not bytes — of the segment's text **as it was shown**: markup
+/// off, and nikud on or off according to what the reader was reading. That is
+/// the only offset the two ends can agree about, because it is the one the
+/// reader was looking at when they dragged.
+///
+/// `from` counts into the **first** segment the ref names; `to` counts into the
+/// **last**, exclusive, and is `None` for *to the end of it*. For a quote of
+/// one segment they are the two ends of one line; for a span they are the two
+/// ragged ends of it, and everything between is whole.
+///
+/// # Why optional and why now
+///
+/// Optional so that a packet written before this field existed still reads, and
+/// so that an older Ksav ignores a newer Girsa's — which is what the module
+/// note above says optional fields are for.
+///
+/// Now, because the cost was rising with every ref already written into every
+/// document. Adding it later to the **ref syntax** would make old and new refs
+/// the same string shape with two different meanings; adding it later as a
+/// packet field, once documents are full of ranges that were never recorded,
+/// means old quotes silently regenerate whole while new ones do not. Carrying
+/// it is one optional field on a struct both applications already compile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Range {
+    /// Where the quote starts in the first place the ref names, in characters.
+    #[serde(default)]
+    pub from: usize,
+    /// Where it ends in the last one, exclusive. `None` is *to the end*.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<usize>,
+}
+
+impl Range {
+    /// The whole of what the ref names.
+    ///
+    /// **Not the same as `None`.** `None` is a packet that never recorded a
+    /// range — written by a Girsa older than this field — and the only honest
+    /// thing a consumer can do with one is regenerate whole. `Some(Range::all())`
+    /// is a reader who selected the whole place, and regenerating that whole is
+    /// what they asked for.
+    #[must_use]
+    pub const fn all() -> Self {
+        Self { from: 0, to: None }
+    }
+
+    /// Whether this names the whole of what the ref names.
+    #[must_use]
+    pub const fn is_all(&self) -> bool {
+        self.from == 0 && self.to.is_none()
+    }
+}
+
 /// A source, on its way from the library to the document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourcePacket {
@@ -116,6 +186,14 @@ pub struct SourcePacket {
     /// A margin note travelling with the source, if one was attached.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+
+    /// Which characters of the quoted place this is — see [`Range`].
+    ///
+    /// `None` on a packet written before the field existed, which is the one
+    /// case a consumer must regenerate whole for, because it is the one case
+    /// where nobody knows what was highlighted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<Range>,
 }
 
 fn default_lang() -> String {
@@ -163,6 +241,26 @@ impl SourcePacket {
             lang: default_lang(),
             version: Version::default(),
             note: None,
+            // `Range::all()` and not `None`. A packet this build writes always
+            // knows what was selected, and *the whole place* is a thing the
+            // reader chose. `None` is reserved for a packet written before the
+            // field existed, which is the one case a consumer cannot know
+            // about and must regenerate whole for.
+            range: Some(Range::all()),
+        }
+    }
+
+    /// The same, for a quote of part of what the ref names.
+    #[must_use]
+    pub fn part(
+        reference: &Ref,
+        display: impl Into<String>,
+        text: impl Into<String>,
+        range: Range,
+    ) -> Self {
+        Self {
+            range: Some(range),
+            ..Self::new(reference, display, text)
         }
     }
 
@@ -337,5 +435,69 @@ mod tests {
         let json = r#"{"schema":1,"ref":"Berakhot 2a","display":"d","text":"t"}"#;
         let p = SourcePacket::from_json(json).expect("the packet itself is well formed");
         assert!(matches!(p.reference(), Err(PacketError::BadRef(_))));
+    }
+
+    #[test]
+    fn a_packet_written_before_the_range_existed_still_reads() {
+        // The point of an optional field, and the module note's own argument
+        // for why adding one is not a break. A packet from a Girsa that had
+        // never heard of `range` reads, and says `None` — which is *nobody
+        // knows what was highlighted*, not *the whole thing was*.
+        let old = r#"{"schema":1,"ref":"girsa:tur/1","display":"טור א'","text":"…"}"#;
+        let packet = SourcePacket::from_json(old).expect("it reads");
+        assert_eq!(packet.range, None);
+    }
+
+    #[test]
+    fn the_whole_place_and_nobody_knows_are_two_different_answers() {
+        // The distinction the whole field exists for. Regenerating a quote
+        // whose range is `None` has to take the whole place, because that is
+        // all anybody can know; regenerating one whose range is `all()` takes
+        // the whole place because that is what the reader selected. Same
+        // outcome, different reason, and only one of them is a guess.
+        let reference: Ref = "girsa:tur/1".parse().expect("a ref");
+        let whole = SourcePacket::new(&reference, "טור א'", "…");
+        assert_eq!(whole.range, Some(Range::all()));
+        assert!(whole.range.is_some_and(|r| r.is_all()));
+
+        let part = SourcePacket::part(
+            &reference,
+            "טור א'",
+            "…",
+            Range {
+                from: 4,
+                to: Some(19),
+            },
+        );
+        assert!(part.range.is_some_and(|r| !r.is_all()));
+    }
+
+    #[test]
+    fn a_range_survives_the_wire() {
+        let reference: Ref = "girsa:tur/1".parse().expect("a ref");
+        let sent = SourcePacket::part(
+            &reference,
+            "טור א'",
+            "…",
+            Range {
+                from: 4,
+                to: Some(19),
+            },
+        );
+        let json = serde_json::to_string(&sent).expect("it writes");
+        assert!(json.contains("\"range\""), "{json}");
+        let back = SourcePacket::from_json(&json).expect("it reads back");
+        assert_eq!(back.range, sent.range);
+    }
+
+    #[test]
+    fn a_whole_selection_costs_one_key_on_the_wire() {
+        // `to` is skipped when it is `None`, so the common case — a whole
+        // se'if — is `"range":{"from":0}` and not a second way of spelling
+        // nothing.
+        let reference: Ref = "girsa:tur/1".parse().expect("a ref");
+        let json = serde_json::to_string(&SourcePacket::new(&reference, "טור א'", "…"))
+            .expect("it writes");
+        assert!(json.contains(r#""range":{"from":0}"#), "{json}");
     }
 }

@@ -26,7 +26,7 @@ crates exist to prevent in the first place.
 
 Three things pay it, and none of them are optional:
 
-1. **Exact version pins.** Both apps depend on `=0.5.0`, not `^0.5`. Taking a
+1. **Exact version pins.** Both apps depend on `=0.5.1`, not `^0.5`. Taking a
    new version is a deliberate act on each side.
 2. **CI here builds both dependents.** `tools/check-dependents.sh`, run by
    `.github/workflows/ci.yml`, builds and tests Girsa and Ksav against the
@@ -34,6 +34,35 @@ Three things pay it, and none of them are optional:
    rather than weeks later inside an app.
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
+
+## 0.5.1 — which characters of the place a quote actually was
+
+Additive: one optional field on the Source Packet, one optional argument on the
+markup writer. No schema bump — `PACKET_SCHEMA_VERSION` stays 1, because an
+optional field is exactly what serde fills in for an older producer.
+
+- **`SourcePacket::range`.** A ref names *places*. A reader who highlights half
+  a se'if and presses Ctrl+C gets the words they highlighted, and the packet
+  said so in `text` and said nothing about **which** words those were — so the
+  promise that makes the whole pairing worth building, *regenerate every quote
+  against a corrected edition without touching the prose*, regenerated the whole
+  se'if. Two sentences in the specification, both true, contradicting each other
+  at the regeneration step. `Range { from, to }` counts characters of the text
+  **as it was shown** — the only offsets the two ends can agree about, because
+  they are the ones the reader was looking at when they dragged. `None` is *no
+  producer ever recorded one*; `Some(Range::all())` is *the reader chose the
+  whole place*, and the two are different answers to *what should regenerating
+  hand back*. [`SourcePacket::part`] is the constructor that takes one.
+- **`mekor` writes it into the document.** `#מראה_מקום(מקור: "girsa:…",
+  תווים: "4-19")`, half-open, `"4-"` for *to the end*, and **absent for the
+  whole place** — which is what every document written before this argument
+  existed already says, and why they are all still right. A packet that never
+  reached a document has nowhere to keep its range, and *where did I use this*
+  would have been the only thing the field was ever good for.
+- **`cited_in` reads it back**, and `refs_in` is now that with the ranges
+  dropped and the repeats removed. Two scanners over the same markup would be
+  two answers to *what does this document cite*, and they would disagree the
+  first time either grew an argument.
 
 ## 0.5.0 — the transport's security model, and thousands
 
@@ -148,6 +177,7 @@ Girsa ──POST /insert──▶ Ksav      a source, into the open document
 Ksav  ──POST /open  ──▶ Girsa     a citation, to the page it names
 Ksav  ──POST /cite  ──▶ Girsa     print this ref in that style
 Ksav  ──POST /quote ──▶ Girsa     the words again, from the corpus as it stands
+                                  (with the packet's `range`, or the whole place)
 either ─GET  /health──▶ other     is my sibling there?
 ```
 

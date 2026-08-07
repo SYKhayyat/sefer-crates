@@ -37,7 +37,7 @@ pub mod read;
 
 pub use read::{read, Block, NoteKind};
 
-use girsa_source::SourcePacket;
+use girsa_source::{Range, SourcePacket};
 
 /// How the citation is placed relative to the quote.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -71,7 +71,11 @@ pub fn to_ksav(packet: &SourcePacket, placement: CitationPlacement) -> String {
         out.push_str(&quote_block(&packet.text));
     }
     match placement {
-        CitationPlacement::Mekor => out.push_str(&mekor(&packet.display, Some(&packet.reference))),
+        CitationPlacement::Mekor => out.push_str(&mekor(
+            &packet.display,
+            Some(&packet.reference),
+            packet.range,
+        )),
         CitationPlacement::Inline if quoting => {
             out.push(' ');
             out.push_str(&inline_citation(&packet.display));
@@ -79,7 +83,11 @@ pub fn to_ksav(packet: &SourcePacket, placement: CitationPlacement) -> String {
         // With nothing in front of it there is nothing for a citation to be
         // *inline* with, and `#מקור[…]` alone is a source note floating in the
         // prose. A mareh makom is what a sefer writes here.
-        CitationPlacement::Inline => out.push_str(&mekor(&packet.display, Some(&packet.reference))),
+        CitationPlacement::Inline => out.push_str(&mekor(
+            &packet.display,
+            Some(&packet.reference),
+            packet.range,
+        )),
     }
     if let Some(note) = &packet.note {
         // A margin note that travelled with the source is the writer's own
@@ -110,16 +118,101 @@ pub fn quote_block(text: &str) -> String {
 /// It is also what `#מראה_מקומות()` collects into a source list at the back:
 /// the refs are already in the document, so a mareh mekomos is a sort and a
 /// print.
+/// `range` is which characters of the quoted place the quote actually was.
+/// [`Range::is_all`] and `None` are both written as **nothing at all** — a
+/// document that quotes a whole se'if says so by saying nothing, which is what
+/// every document written before this argument existed already says, and what
+/// makes them all still correct.
 #[must_use]
-pub fn mekor(citation: &str, reference: Option<&str>) -> String {
+pub fn mekor(citation: &str, reference: Option<&str>, range: Option<Range>) -> String {
     match reference {
         Some(reference) => format!(
-            "#מראה_מקום(מקור: \"{}\")[{}]",
+            "#מראה_מקום(מקור: \"{}\"{})[{}]",
             in_a_string(reference),
+            characters(range),
             escape(citation)
         ),
         None => format!("#מראה_מקום[{}]", escape(citation)),
     }
+}
+
+/// The named argument that carries the range, or nothing.
+///
+/// `תווים: "4-19"` — characters, half-open, counted in the text **as
+/// the reader was shown it**. `"4-"` is *from there to the end*, which is what
+/// a highlight that runs off the last word means and what an editor who adds a
+/// word to the se'if should still get.
+fn characters(range: Option<Range>) -> String {
+    match range {
+        Some(range) if !range.is_all() => match range.to {
+            Some(to) => format!(", תווים: \"{}-{to}\"", range.from),
+            None => format!(", תווים: \"{}-\"", range.from),
+        },
+        _ => String::new(),
+    }
+}
+
+/// One `מקור:` a document stores: the place, and which characters of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cited {
+    /// The `girsa:` ref.
+    pub reference: String,
+    /// The characters of it this citation quoted, if the document said.
+    ///
+    /// `None` is *the whole of what the ref names* — see [`mekor`]. It is not
+    /// the packet's `None`, which means nobody recorded one; by the time a
+    /// citation is in a document the two have the same answer, and only the
+    /// document's spelling of it survives.
+    pub range: Option<Range>,
+}
+
+/// Every citation the document stores, in the order they appear.
+///
+/// [`refs_in`] is this with the ranges dropped and the repeats removed. It is
+/// written that way round on purpose: a second scanner over the same markup
+/// would be a second answer to *what does this document cite*, and the two
+/// would disagree the first time either grew an argument.
+#[must_use]
+pub fn cited_in(markup: &str) -> Vec<Cited> {
+    let mut out = Vec::new();
+    let mut rest = markup;
+    while let Some(at) = rest.find("מקור:") {
+        rest = &rest[at + "מקור:".len()..];
+        let Some(open) = rest.find('"') else { break };
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('"') else { break };
+        let found = &after[..close];
+        rest = &after[close + 1..];
+        if !found.starts_with("girsa:") {
+            continue;
+        }
+        out.push(Cited {
+            reference: found.to_string(),
+            // Only up to the `]` that ends this citation: the next one's
+            // argument is not this one's, and a document is a list of these.
+            range: range_in(&rest[..rest.find(']').unwrap_or(rest.len())]),
+        });
+    }
+    out
+}
+
+/// `תווים: "4-19"` read back off the markup.
+fn range_in(args: &str) -> Option<Range> {
+    let at = args.find("תווים:")? + "תווים:".len();
+    let rest = &args[at..];
+    let open = rest.find('"')?;
+    let after = &rest[open + 1..];
+    let close = after.find('"')?;
+    let (from, to) = after[..close].split_once('-')?;
+    Some(Range {
+        from: from.trim().parse().ok()?,
+        // Empty is *to the end*, which is a range and not a failure to write
+        // one. `"4-"` and `"4-0"` are different documents.
+        to: match to.trim() {
+            "" => None,
+            to => Some(to.parse().ok()?),
+        },
+    })
 }
 
 /// Escaping for a Typst **string**, which is not the same as for markup.
@@ -214,18 +307,11 @@ pub fn to_text(markup: &str) -> String {
 /// mareh mekomos is a sort and a print (spec.md §10.4).
 #[must_use]
 pub fn refs_in(markup: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut rest = markup;
-    while let Some(at) = rest.find("מקור:") {
-        rest = &rest[at + "מקור:".len()..];
-        let Some(open) = rest.find('"') else { break };
-        let after = &rest[open + 1..];
-        let Some(close) = after.find('"') else { break };
-        let found = &after[..close];
-        if found.starts_with("girsa:") && !out.iter().any(|r| r == found) {
-            out.push(found.to_string());
+    let mut out: Vec<String> = Vec::new();
+    for cited in cited_in(markup) {
+        if !out.contains(&cited.reference) {
+            out.push(cited.reference);
         }
-        rest = &after[close + 1..];
     }
     out
 }
@@ -264,6 +350,130 @@ mod tests {
             "שו\"ע או\"ח סימן א' סעיף א'",
             "יתגבר כארי לעמוד בבוקר לעבודת בוראו",
         )
+    }
+
+    #[test]
+    fn a_whole_seif_says_nothing_about_characters() {
+        // Every document written before this argument existed says exactly
+        // this, which is why they are all still right.
+        let markup = mekor("שו\"ע", Some("girsa:shulchan-arukh/orach-chayim/1:1"), None);
+        assert!(!markup.contains("תווים"));
+        assert_eq!(
+            markup,
+            mekor(
+                "שו\"ע",
+                Some("girsa:shulchan-arukh/orach-chayim/1:1"),
+                Some(Range::all())
+            )
+        );
+    }
+
+    #[test]
+    fn half_a_seif_says_which_half_and_can_be_read_back() {
+        let markup = mekor(
+            "שו\"ע",
+            Some("girsa:shulchan-arukh/orach-chayim/1:1"),
+            Some(Range {
+                from: 4,
+                to: Some(19),
+            }),
+        );
+        assert!(markup.contains("תווים: \"4-19\""));
+        let cited = cited_in(&markup);
+        assert_eq!(cited.len(), 1);
+        assert_eq!(
+            cited[0].range,
+            Some(Range {
+                from: 4,
+                to: Some(19)
+            })
+        );
+    }
+
+    #[test]
+    fn to_the_end_is_a_range_and_not_a_missing_one() {
+        // `"4-"` and `"4-0"` are different documents, and reading the first as
+        // the second would quote nothing at all.
+        let markup = mekor(
+            "שו\"ע",
+            Some("girsa:shulchan-arukh/orach-chayim/1:1"),
+            Some(Range { from: 4, to: None }),
+        );
+        assert!(markup.contains("תווים: \"4-\""));
+        assert_eq!(
+            cited_in(&markup)[0].range,
+            Some(Range { from: 4, to: None })
+        );
+    }
+
+    #[test]
+    fn one_citation_s_characters_are_not_the_next_one_s() {
+        let document = format!(
+            "{}\nוכן\n{}\n",
+            mekor(
+                "א'",
+                Some("girsa:shulchan-arukh/orach-chayim/1:1"),
+                Some(Range {
+                    from: 0,
+                    to: Some(10)
+                })
+            ),
+            mekor("ב'", Some("girsa:shulchan-arukh/orach-chayim/1:2"), None),
+        );
+        let cited = cited_in(&document);
+        assert_eq!(cited.len(), 2);
+        assert_eq!(
+            cited[0].range,
+            Some(Range {
+                from: 0,
+                to: Some(10)
+            })
+        );
+        assert_eq!(
+            cited[1].range, None,
+            "the second one quotes the whole se'if"
+        );
+    }
+
+    #[test]
+    fn the_range_travels_from_the_packet_into_the_document() {
+        let mut packet = packet();
+        packet.range = Some(Range {
+            from: 0,
+            to: Some(10),
+        });
+        let markup = to_ksav(&packet, CitationPlacement::Mekor);
+        assert_eq!(
+            cited_in(&markup)[0].range,
+            Some(Range {
+                from: 0,
+                to: Some(10)
+            })
+        );
+    }
+
+    #[test]
+    fn the_ranges_do_not_change_which_refs_a_document_cites() {
+        // `refs_in` is `cited_in` with the ranges dropped. The same sefer
+        // quoted twice at two different ranges is one entry in a mareh
+        // mekomos, because it is one place.
+        let document = format!(
+            "{}\n{}\n",
+            mekor(
+                "א'",
+                Some("girsa:shulchan-arukh/orach-chayim/1:1"),
+                Some(Range {
+                    from: 0,
+                    to: Some(4)
+                })
+            ),
+            mekor("א'", Some("girsa:shulchan-arukh/orach-chayim/1:1"), None),
+        );
+        assert_eq!(
+            refs_in(&document),
+            ["girsa:shulchan-arukh/orach-chayim/1:1"]
+        );
+        assert_eq!(cited_in(&document).len(), 2);
     }
 
     #[test]
@@ -312,7 +522,7 @@ mod tests {
         // somebody resolves one. The command takes both shapes rather than
         // making the caller invent a ref to satisfy it.
         assert_eq!(
-            mekor("שו\"ע או\"ח א' א'", None),
+            mekor("שו\"ע או\"ח א' א'", None, None),
             "#מראה_מקום[שו\"ע או\"ח א' א']"
         );
     }
