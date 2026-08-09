@@ -372,10 +372,21 @@ Videos/
   sefer-crates/   this repository
 ```
 
-Each app's dependency carries both `version` and `path`, so day-to-day work
-across all three feels like one workspace without them being one. The `path`
-points at the sibling checkout; when these crates are published, `version` is
-what cargo uses and `path` is what it ignores.
+The two apps depend on these crates differently, and the difference is
+deliberate rather than an oversight anybody is getting round to.
+
+**Girsa** carries `version` and `path` — the `path` points at the sibling
+checkout, and when these crates are published `version` is what cargo uses and
+`path` is what it ignores. Day-to-day work across the two feels like one
+workspace without them being one.
+
+**Ksav** carries `version` and **`git` + `rev`**. A path to a sibling of its
+checkout root meant `git clone ksav && cargo build` failed at `cargo metadata` —
+before a compiler ran, naming a directory the reader had never heard of — and
+four of its five CI jobs carried a second `actions/checkout` to fake the desk
+layout. For the days you are moving the seam, `Ksav/.cargo/config.toml.example`
+restores the sibling checkout with a `paths` override; the file explains at
+length why `paths` and not `[patch]`.
 
 ## Verify
 
@@ -388,8 +399,22 @@ bash tools/check-dependents.sh     # the cross-repo check, run exactly as CI run
 ```
 
 `check-dependents.sh` is the one that matters. To see it work, rename a public
-item in `girsa-hebrew` and run it: Girsa goes red here, in this repository,
-before the change can reach either app.
+item in `girsa-hebrew` and run it: both apps go red here, in this repository,
+before the change can reach either of them.
+
+That used to be one app. Ksav pins by rev, so the script was building it against
+**the last pushed commit** rather than against the tree it exists to check —
+renaming a public item and running it went green. Two of the three dependents'
+worth of safety net, quietly absent, in the script whose own header calls itself
+the whole reason the split is affordable.
+
+It installs the `paths` override itself now, prepended to whatever
+`.cargo/config.toml` a dependent already has (Girsa's is tracked and carries a
+linker choice) and removed on exit, including on Ctrl-C. And it **asserts the
+override took**, by asking `cargo metadata` where each girsa package actually
+came from: a `path+file://` under this checkout, or the run fails before a
+compiler starts. An override that silently stopped applying would be this script
+going green for the second time in its life for the same reason.
 
 ## Licence
 
