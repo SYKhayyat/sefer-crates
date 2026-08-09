@@ -3,10 +3,25 @@
 The contract shared by **[Girsa](https://github.com/SYKhayyat/girsa)** (the
 library) and **[Ksav](https://github.com/SYKhayyat/ksav)** (the writing app).
 
-Both applications compile these crates. That is the entire reason the two-app
-system works: one citation formatter compiled into both means the app that
-*produces* citations and the app that *prints* them cannot disagree — precisely
-the class of bug that would destroy trust in the pairing.
+Both applications compile *most of* these crates, and the guarantee they buy is
+real. The way it is bought is not what this paragraph used to say.
+
+It said: *"one citation formatter compiled into both means the app that produces
+citations and the app that prints them cannot disagree."* Ksav does not compile
+`girsa-cite`. It has never compiled `girsa-cite` — its three manifests name
+`girsa-source`, `girsa-ksav`, `girsa-post` and, since 2026-08-09, `girsa-hebrew`.
+
+**And the real mechanism is stronger than the claimed one.** Ksav has no citation
+formatter *at all*: it prints `packet.display`, a string Girsa already formatted,
+and asks the loopback for a re-print in another style. A formatter Ksav cannot
+reach cannot disagree with Girsa's. What the shared repository actually prevents
+here is a *second implementation coming into existence*, which is the thing worth
+preventing.
+
+`girsa-ksav` is the crate that earns the arrangement in the claimed way:
+`to_ksav`, `mekor`, `live_citation`, `cited_in` and `refs_in` are called from
+both sides, and `girsa-desk` asserts **equality** against it rather than merely
+compiling it.
 
 | Crate | Purpose |
 |---|---|
@@ -245,7 +260,7 @@ A list's items and a table's cells live in the *arguments* — Ksav writes
 are usually settings. So a document's lists and tables were absent from anything
 reading it, and it did not look like a loss.
 
-Of Ksav's 104 commands it knows the forty that are structure. Everything else is
+Of Ksav's 115 commands it knows the forty that are structure. Everything else is
 inline and its content is kept, so a new style command in Ksav needs no change
 here and **cannot lose a word by being unknown** — which is exactly how the tables
 were lost. Blocks come out flat in reading order, with an item carrying its depth
