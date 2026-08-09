@@ -223,6 +223,61 @@ done
 
 restore_configs
 
+# ------------------------------------------ who actually compiles which crate
+#
+# `girsa-cite/src/lib.rs` opened with *"one implementation, compiled into both
+# applications"*, and Ksav has never named it in a manifest. The 9 August report
+# found that sentence in three places; correcting those three left two more —
+# the crate's own header and this repository's README — because the sweep was
+# the quoted line numbers rather than the claim.
+#
+# A doc comment cannot check itself, and this script is the one place with both
+# checkouts on disk. So: a crate whose documentation says *both applications*
+# has to be named by both applications' manifests. Direct dependencies only —
+# transitively compiled is not the claim, and `girsa-ref` reaching Ksav through
+# `girsa-ksav` would make the loose version of this pass for a crate no Ksav
+# code path can call.
+#
+# It declines to run rather than passing when a checkout is missing, for the
+# same reason the skip list at the end is loud.
+if [[ ${#skipped[@]} -eq 0 ]]; then
+  echo "== the shared crates: is *both applications* true where it is claimed?"
+  lying=()
+  for c in "${crates[@]}"; do
+    lib="$here/crates/$c/src/lib.rs"
+    [[ -f "$lib" ]] || continue
+    # Asserted, not quoted. `girsa-cite`'s header now *records* the old claim —
+    # "this said 'compiled into both applications', and it never was" — and a
+    # sweep that could not tell a claim from a citation of one would force every
+    # correction in this repository to be written without naming what it
+    # corrects. So a phrase with a quotation mark in front of it on the same
+    # line is somebody quoting, which is the same rule the prohibition suites
+    # draw around `lamdan/` and `docs/`.
+    claim="$(grep -iE 'compiled into both|both applications compile|both apps compile' "$lib" \
+      | grep -vE '["“][^"“]*(compiled into both|both applications compile|both apps compile)' || true)"
+    [[ -z "$claim" ]] && continue
+    named_by=()
+    for name in "${!roots[@]}"; do
+      # A dependency line, not a mention: `girsa-cite = { … }` or
+      # `girsa-cite.workspace = true` at the start of a line in a manifest.
+      if grep -rqE "^[[:space:]]*$c([[:space:]]*=|\.workspace)" \
+        --include=Cargo.toml "${roots[$name]}" 2>/dev/null; then
+        named_by+=("$name")
+      fi
+    done
+    if [[ ${#named_by[@]} -lt 2 ]]; then
+      lying+=("$c: says 'both applications'; named by: ${named_by[*]:-neither}")
+    fi
+  done
+  if [[ ${#lying[@]} -gt 0 ]]; then
+    echo "   a claim in a doc comment that the manifests do not support:"
+    printf '     %s\n' "${lying[@]}"
+    failed+=("sefer-crates (a crate claims both applications and one does not compile it)")
+  else
+    echo "   yes, everywhere it is claimed"
+  fi
+fi
+
 # Building both dependents proves they still compile against this tree. It does
 # not prove they still agree with each other — and the Source Packet, which is
 # the thing they agree *about*, is defined in this repository. Ksav asserts

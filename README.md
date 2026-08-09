@@ -28,7 +28,7 @@ compiling it.
 | `girsa-source` | The Source Packet. The wire contract. |
 | `girsa-ref` | Refs, citation parsing, offline resolution, the redirect table |
 | `girsa-hebrew` | Normalization — nikud, prefixes, ktiv male/chaser, gershayim, abbreviations |
-| `girsa-cite` | Citation formatting — one implementation, both apps |
+| `girsa-cite` | Citation formatting — the only implementation there is, and Girsa's (see above) |
 | `girsa-post` | The loopback between them: token-gated, localhost only, and the `girsa://` links |
 | `girsa-ksav` | Writing real Ksav markup — the document language, so Girsa's buffer and Ksav agree |
 
@@ -269,9 +269,16 @@ nothing addressing it could name.
 
 ## 0.3.0 — `girsa-cite`, `girsa-post`, and a whole sefer you can point at
 
-`girsa-cite` was a scaffold with an enum in it. It is now the formatter, and
-both applications compile it: **one implementation of what a citation is**, so
-the app that produces one and the app that prints one cannot disagree.
+`girsa-cite` was a scaffold with an enum in it. It is now the formatter:
+**one implementation of what a citation is**, so the app that produces one and
+the app that prints one cannot disagree.
+
+> This said *"and both applications compile it"*, and they never did. Correcting
+> the claim in the three places the 9 August report named left it standing here
+> and in `girsa-cite`'s own header — the class fixed at the sites that were
+> quoted and nowhere else, which is that report's whole thesis. The lead of this
+> file has the true version, and `tools/check-dependents.sh` now asks the
+> manifests rather than trusting the prose.
 
 ```rust
 cite(&sefer, &r, CiteStyle::HebrewFull)   // שולחן ערוך, אורח חיים סימן א' סעיף א'

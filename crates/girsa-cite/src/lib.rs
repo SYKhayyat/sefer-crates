@@ -1,9 +1,27 @@
-//! Citation formatting — one implementation, compiled into both applications.
+//! Citation formatting — the only implementation there is, and Girsa's.
 //!
 //! The app that *produces* citations and the app that *prints* them cannot be
 //! allowed to disagree; that is precisely the class of bug that would destroy
-//! trust in the pairing (spec.md §12). So there is one formatter and both link
-//! against it.
+//! trust in the pairing (spec.md §12).
+//!
+//! # This header said "compiled into both applications", and it never was
+//!
+//! Ksav's three manifests name `girsa-source`, `girsa-ksav` and `girsa-post`,
+//! and this crate appears in none of them at any depth. Ksav has never formatted
+//! a citation: it prints `packet.display`, a string Girsa already formatted, and
+//! asks `/refresh` for a re-print when the style changes.
+//!
+//! So the guarantee is real and its mechanism is the stronger one. Not *both
+//! applications compiling one formatter* — **Ksav has no formatter at all and
+//! asks.** A formatter the pen cannot reach cannot disagree with the reader's.
+//!
+//! The 9 August report found that sentence in three places. Correcting those
+//! three left it standing here and in `README.md`'s 0.3.0 note, which is the
+//! report's own thesis arriving inside its own fix: the class named correctly,
+//! the quoted instances repaired, the siblings not swept.
+//! `tools/check-dependents.sh` asks the two manifests now rather than taking a
+//! doc comment's word for it — and it can tell a claim from a citation of one,
+//! which is why this paragraph is allowed to exist.
 //!
 //! ```
 //! use girsa_cite::{cite, CiteStyle, Sefer};
