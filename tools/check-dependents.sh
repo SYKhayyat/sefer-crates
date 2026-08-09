@@ -113,7 +113,13 @@ install_override() {
     echo "# Prepended by sefer-crates/tools/check-dependents.sh. Removed when it exits."
     echo "paths = ["
     for c in "${crates[@]}"; do
-      echo "    \"$here/crates/$c\","
+      # `$here_url`, not `$here`. Under Git Bash `$here` is `/c/Users/…`, and
+      # cargo on Windows resolves a leading `/` against the config file's own
+      # drive — so it looked for `C:\c\Users\…`, which is not anywhere. The
+      # comparison twenty lines down already knew this and used `cygpath -m`;
+      # the line that *writes* the path did not, which is the same file
+      # disagreeing with itself about what a path is.
+      echo "    \"$here_url/crates/$c\","
     done
     echo "]"
     echo
@@ -135,10 +141,26 @@ install_override() {
 # check is that **every** girsa package resolves to a path, and that at least one
 # was found at all. A graph with no girsa crates in it would otherwise pass by
 # being empty, which is the shape this project keeps rebuilding.
+
+# Run cargo from the dependent's own root, not from here.
+#
+# Cargo discovers `.cargo/config.toml` by walking up from the **current working
+# directory**, not from `--manifest-path`. So every cargo call in this file read
+# *this* repository's config and never saw the override that had just been
+# written into the dependent's — and the assertion above reported, correctly,
+# that the override had not taken. The header says "run it from anywhere", and
+# that sentence was the bug: true of where the script sits, false of where cargo
+# looks.
+in_root() {
+  local root="$1"
+  shift
+  (cd "$root" && "$@")
+}
+
 override_took() {
   local manifest="$1" name="$2"
   local meta
-  if ! meta="$(cargo metadata --format-version 1 --manifest-path "$manifest" 2>/dev/null)"; then
+  if ! meta="$(in_root "${roots[$name]}" cargo metadata --format-version 1 --manifest-path "$manifest" 2>/dev/null)"; then
     echo "== $name: cargo metadata failed — cannot verify the override took"
     return 1
   fi
@@ -210,13 +232,13 @@ for entry in "${dependents[@]}"; do
   fi
 
   echo "== $name: cargo build --all-targets"
-  if ! cargo build --manifest-path "$manifest" --all-targets; then
+  if ! in_root "${roots[$name]}" cargo build --manifest-path "$manifest" --all-targets; then
     failed+=("$name (build)")
     continue
   fi
 
   echo "== $name: cargo test"
-  if ! cargo test --manifest-path "$manifest"; then
+  if ! in_root "${roots[$name]}" cargo test --manifest-path "$manifest"; then
     failed+=("$name (test)")
   fi
 done
