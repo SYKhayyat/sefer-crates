@@ -200,12 +200,8 @@ mod tests {
         // `tokenize` is `for_each_token` plus a `to_string`, so this cannot
         // fail without one of them being rewritten — which is the point of
         // pinning it: the next person to optimize the walker has a fence.
-        for input in [
-            "מֵאֵימָתַי קוֹרִין אֶת־שְׁמַע",
-            "Berakhot 2a — קוֹרִין",
-            "  ",
-            "א",
-        ] {
+        for input in ["מֵאֵימָתַי קוֹרִין אֶת־שְׁמַע", "Berakhot 2a — קוֹרִין", "  ", "א"]
+        {
             let mut walked = Vec::new();
             for_each_token(input, |t, s, e| walked.push((t.to_string(), s, e)));
             let collected: Vec<_> = tokenize(input)

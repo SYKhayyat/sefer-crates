@@ -672,7 +672,10 @@ mod tests {
                 status: 403,
                 body: "no".into(),
             },
-            PostError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file")),
+            PostError::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no such file",
+            )),
         ];
         let mut seen = Vec::new();
         for e in &errors {
@@ -698,7 +701,11 @@ mod tests {
                 ),
             }
         }
-        assert_eq!(seen.len(), PostError::CODES.len(), "a code was not exercised");
+        assert_eq!(
+            seen.len(),
+            PostError::CODES.len(),
+            "a code was not exercised"
+        );
     }
 
     /// The words after the colon are not API, and this is the test that says so.
@@ -713,7 +720,8 @@ mod tests {
         // The reader's sentence is chosen by the name; the rest is detail on a
         // hover. `girsa_app::trouble::Code` established this shape, and this is
         // the type that actually crosses between repositories.
-        let (code, rest) = e.to_string().split_once(": ").expect("a coded message");
+        let said = e.to_string();
+        let (code, rest) = said.split_once(": ").expect("a coded message");
         assert_eq!(code, "post-refused");
         assert!(rest.contains("whatever the far side said"));
     }
