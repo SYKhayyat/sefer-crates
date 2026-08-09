@@ -48,7 +48,7 @@ pub use marks::{
     fold_final, fold_quote_mark, is_geresh, is_gershayim, is_hebrew_letter, is_mark,
     is_word_breaking_punctuation, CANONICAL_GERESH, CANONICAL_GERSHAYIM, FINAL_FORMS,
 };
-pub use normalize::{normalize, normalize_into, tokenize, Token};
+pub use normalize::{for_each_token, normalize, normalize_into, tokenize, Token};
 pub use prefix::{peelings, PREFIX_LETTERS};
 pub use variants::{variants, variants_with, VariantKind, VariantSet};
 
