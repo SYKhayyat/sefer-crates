@@ -34,7 +34,7 @@
 //! assert!(v.forms_of_kind(VariantKind::PrefixPeeled).any(|f| f == "שבת"));
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/girsa-hebrew/0.5.0")]
+#![doc(html_root_url = "https://docs.rs/girsa-hebrew")]
 
 mod abbrev;
 mod ktiv;

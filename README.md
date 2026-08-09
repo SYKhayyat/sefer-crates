@@ -35,6 +35,44 @@ Three things pay it, and none of them are optional:
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
 
+## 0.5.2 — an English Ksav document has a shape too
+
+`read()` matched **Hebrew command names only**. Every command in Ksav is bound
+twice — `#כותרת1` and `#h1`, `#רשימה` and `#bullets` — and an English document
+uses the second throughout, so an English sefer came off the shelf as an
+undifferentiated run of paragraphs: no headings, therefore no levels in the
+address; no items, no rows, and every footnote spliced back into the middle of
+its sentence.
+
+Nothing errored. `Role::Inline` is the *correct* answer for a name nobody knows
+— it is what keeps a new style command in Ksav from losing a word — and that is
+precisely what made this silent. It is the same defect the module was written
+against, one language over.
+
+- **`ALIASES`** and **`PARAM_ALIASES`**, both public. Thirty-eight structural
+  commands and the two argument names, in both spellings. Names are normalised
+  through them before any decision is made, so `role()` stays a single Hebrew
+  match rather than growing a second arm per row.
+- The settings family is a **prefix in Hebrew and a suffix in English** —
+  `#הגדרות_כותרות` is `#headings_config` — so its English half could not be a
+  row of the table and is matched as `_config`.
+- The two tables are kept apart, because `ממוספרת` is a command (`numbered`)
+  *and* a parameter (`numbered:`), and one flat table over both would answer
+  whichever it met first.
+
+The pairs are checked where they can be: **Ksav's `engine/tests/from_girsa.rs`**
+holds every row against `typst/ksav.typ`, which is the thing that actually binds
+both spellings. Girsa cannot run that check — it has no prelude — so the test
+lives in the dependent rather than the dependency. Here, the fence is a
+translation: the same document in both spellings has to read to the same blocks,
+and the Hebrew half is asserted to be more than a flat run of paragraphs, or the
+equality would hold for the wrong reason.
+
+Also: `html_root_url` carried a hand-written version in all six crates, and all
+six had already drifted from the workspace version. The version is gone rather
+than corrected — docs.rs resolves the crate to its latest — so there is nothing
+left to go stale.
+
 ## 0.5.1 — which characters of the place a quote actually was
 
 Additive: one optional field on the Source Packet, one optional argument on the

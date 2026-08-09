@@ -37,7 +37,7 @@
 //! assert!(matches!(resolve(&lexicon, "או\"ח א'"), Resolution::Ambiguous(_)));
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/girsa-ref/0.5.0")]
+#![doc(html_root_url = "https://docs.rs/girsa-ref")]
 
 pub mod address;
 pub mod daf;

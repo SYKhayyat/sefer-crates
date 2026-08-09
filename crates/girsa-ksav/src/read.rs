@@ -41,11 +41,28 @@
 //!
 //! # The command table, and where it really lives
 //!
-//! Ksav's `engine/src/commands.rs` is the registry — 104 commands, each with a
+//! Ksav's `engine/src/commands.rs` is the registry — 115 commands, each with a
 //! category. This file knows only the ones that are **structure**: headings,
 //! lists, tables, footnotes and block quotes, about forty names. Everything
 //! else is inline by default and its content is kept, so a new style command in
 //! Ksav needs no change here and cannot lose a word by being unknown.
+//!
+//! # Both spellings, because a Ksav document has two
+//!
+//! Every command in Ksav is bound twice — `#כותרת1` and `#h1`, `#רשימה` and
+//! `#bullets` — and an English document uses the second throughout. This file
+//! matched the Hebrew names only, so a shelved English sefer came back as a
+//! flat run of paragraphs: no headings, therefore no levels in the address; no
+//! items, no rows, and every footnote spliced into the middle of its sentence.
+//! Not an error anywhere — [`Role::Inline`] is the *correct* answer for a name
+//! nobody knows, and that is exactly what made it silent.
+//!
+//! So the names are normalised through [`ALIASES`] before anything is decided.
+//! The pairs are Ksav's own, and Ksav's `engine/tests/from_girsa.rs` holds them
+//! against `typst/ksav.typ` — the direction that can be checked, since Ksav
+//! compiles this crate and the prelude is the thing that actually binds both
+//! spellings. A pair that goes stale there is a build failure, not a sefer that
+//! quietly lost its shape.
 
 /// One thing in a document, in the order it was written.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,13 +159,84 @@ enum Role {
     Inline,
 }
 
+/// Every structural command this file keys on, in both of Ksav's spellings.
+///
+/// Not the whole registry, and deliberately: an unknown command is
+/// [`Role::Inline`] and keeps its words, so the only names that have to be here
+/// are the ones whose *shape* would otherwise be lost. Adding a style command
+/// to Ksav still needs no change here.
+///
+/// `כותרת4`/`5`/`6` have no registry entry — the toolbar stops advertising at
+/// three — but the prelude binds `h4`, `h5` and `h6` all the same, and a
+/// document written by hand or by an older template contains them. A table
+/// built by reading the toolbar is the mistake one repository over
+/// (`mode.ts`'s old heading list); this one is built by reading the prelude.
+pub const ALIASES: &[(&str, &str)] = &[
+    ("שער", "title"),
+    ("תת_שער", "subtitle"),
+    ("כותרת1", "h1"),
+    ("כותרת2", "h2"),
+    ("כותרת3", "h3"),
+    ("כותרת4", "h4"),
+    ("כותרת5", "h5"),
+    ("כותרת6", "h6"),
+    ("כותרת", "hlevel"),
+    ("רשימה", "bullets"),
+    ("ממוספרת", "numbered"),
+    ("ממוספרת_עברית", "henum"),
+    ("רשימת_הגדרות", "deflist"),
+    ("טבלה", "mktable"),
+    ("הערה", "fnote"),
+    ("הערה_א", "tier1"),
+    ("הערה_ב", "tier2"),
+    ("הערה_ג", "tier3"),
+    ("הערה_בדרגה", "tier"),
+    ("הערה_זרם", "stream_note"),
+    ("הערת_צד", "callout"),
+    ("הערת_ימין", "noteright"),
+    ("הערת_שמאל", "noteleft"),
+    ("הערת_גיליון", "sidenote"),
+    ("הערת_תוכן", "contentnote"),
+    ("הערתסיום", "endnote"),
+    ("מראה_מקום", "sourcenote"),
+    ("הערת_מקור", "sourcenote_stream"),
+    ("הערת_עורך", "comment_"),
+    ("הערה_על_הערה", "subnote"),
+    ("ציטוט", "blockquote"),
+    ("מעבר_עמוד", "pbreak"),
+    ("מעבר_טור", "cbreak"),
+    ("מעבר_שורה", "lbreak"),
+    ("קו_מפריד", "hrule"),
+    ("מקטע_עמוד", "page_section"),
+    ("חסר", "blank"),
+    ("כותרת_תא", "headcell"),
+];
+
+/// The two argument names this file reads, in both spellings.
+///
+/// Kept apart from [`ALIASES`] rather than merged into it, because `ממוספרת` is
+/// a command (`numbered`) *and* a parameter (`numbered: …`), and one flat table
+/// over both would answer whichever it met first. That is the same mistake the
+/// prelude's own `_en_params` records at `justify`/`align`, one word with two
+/// readings, and it is worth not making twice.
+pub const PARAM_ALIASES: &[(&str, &str)] = &[("עמודות", "columns"), ("רמה", "level")];
+
+/// The Hebrew spelling of `name`, or `name` itself if it is already Hebrew — or
+/// is a command nobody here has heard of, which is most of them.
+fn hebrew<'a>(table: &[(&'static str, &'static str)], name: &'a str) -> &'a str {
+    table
+        .iter()
+        .find(|(_, en)| *en == name)
+        .map_or(name, |(he, _)| *he)
+}
+
 /// What a command name does.
 ///
 /// Unknown is [`Role::Inline`] on purpose: Ksav gains style commands, and a
 /// reader that dropped what it did not recognise would lose a sentence for a
 /// font change.
 fn role(name: &str) -> Role {
-    match name {
+    match hebrew(ALIASES, name) {
         "שער" => Role::Heading(1),
         "תת_שער" => Role::Heading(2),
         "כותרת1" => Role::Heading(1),
@@ -186,7 +274,12 @@ fn role(name: &str) -> Role {
             Role::Break
         }
 
-        _ if name.starts_with("הגדרות_") => Role::Setting,
+        // The settings family is a prefix in Hebrew and a *suffix* in English —
+        // `#הגדרות_כותרות` is `#headings_config` — so the English half is not a
+        // name in the table above and could not be. Ten of them, all `_en`
+        // wrappers over a `#let הגדרות_*`, and every one of them holds
+        // configuration rather than words.
+        n if n.starts_with("הגדרות_") || n.ends_with("_config") => Role::Setting,
 
         _ => Role::Inline,
     }
@@ -541,7 +634,7 @@ impl Reader<'_> {
                 ':' => {
                     self.at += 1;
                     let value = self.setting();
-                    match word.trim() {
+                    match hebrew(PARAM_ALIASES, word.trim()) {
                         "עמודות" => out.columns = value.trim().parse().ok(),
                         "רמה" => out.level = value.trim().parse().ok(),
                         _ => {}
@@ -551,9 +644,9 @@ impl Reader<'_> {
                 '[' => {
                     self.at += 1;
                     let body = self.raw(']');
-                    let name = word.trim().trim_start_matches('#').to_string();
+                    let name = word.trim().trim_start_matches('#');
                     out.parts.push(Part {
-                        header: name == "כותרת_תא",
+                        header: hebrew(ALIASES, name) == "כותרת_תא",
                         body,
                     });
                     word.clear();
@@ -942,6 +1035,98 @@ mod tests {
                 Block::Paragraph("פסקה שנייה".into()),
             ]
         );
+    }
+
+    /// The same document in both spellings reads to the same blocks.
+    ///
+    /// This is the fence, and it is written as a translation rather than as a
+    /// list of names on purpose: a list would be a second copy of [`ALIASES`]
+    /// and would agree with it by construction. Here the Hebrew half is read by
+    /// the code that always worked, and the English half has to arrive at the
+    /// same answer — headings at the same levels, items at the same depths, the
+    /// header row still a header row, the note still lifted out of its
+    /// sentence.
+    ///
+    /// Before the aliases, every English block came back `Paragraph`.
+    #[test]
+    fn an_english_document_reads_the_same_as_its_hebrew_twin() {
+        const HE: &str = "#שער[ספר]
+#כותרת4[פרק]
+
+טקסט#הערה[שוליים] המשך.
+
+#רשימה(פריט[ראשון], פריט[שני #ממוספרת(פריט[פנימי])])
+
+#טבלה(עמודות: 2, כותרת_תא[א], כותרת_תא[ב], תא[1], תא[2])
+
+#ציטוט[מובאה]
+
+#הגדרות_כותרות(רמה: 2)
+
+#מעבר_עמוד";
+        const EN: &str = "#title[ספר]
+#h4[פרק]
+
+טקסט#fnote[שוליים] המשך.
+
+#bullets(item[ראשון], item[שני #numbered(item[פנימי])])
+
+#mktable(columns: 2, headcell[א], headcell[ב], cell[1], cell[2])
+
+#blockquote[מובאה]
+
+#headings_config(level: 2)
+
+#pbreak";
+        let he = read(HE);
+        assert_eq!(read(EN), he, "the English spelling read differently");
+        // …and the Hebrew reading is not itself a flat run of paragraphs, or
+        // the equality above would hold for the wrong reason — which is the
+        // shape `ONLY_AT_TOP` takes in a comparison test.
+        assert!(
+            he.iter()
+                .any(|b| matches!(b, Block::Heading { level: 4, .. }))
+                && he.iter().any(|b| matches!(b, Block::Item { depth: 1, .. }))
+                && he
+                    .iter()
+                    .any(|b| matches!(b, Block::Row { header: true, .. }))
+                && he.iter().any(|b| matches!(b, Block::Note { .. }))
+                && he.iter().any(|b| matches!(b, Block::Quote(_))),
+            "{he:#?}"
+        );
+    }
+
+    /// No name is in the table twice, on either side.
+    ///
+    /// [`hebrew`] takes the first match, so a duplicate is a silent preference
+    /// rather than an error — and the two sides are different kinds of
+    /// duplicate: a repeated Hebrew name is a typo, a repeated English one is
+    /// two commands that would read as one.
+    #[test]
+    fn the_alias_table_has_no_name_twice() {
+        for table in [ALIASES, PARAM_ALIASES] {
+            for (i, (he, en)) in table.iter().enumerate() {
+                let dup_he = table.iter().skip(i + 1).find(|(h, _)| h == he);
+                let dup_en = table.iter().skip(i + 1).find(|(_, e)| e == en);
+                assert!(dup_he.is_none(), "{he} is in the table twice");
+                assert!(dup_en.is_none(), "{en} is in the table twice");
+            }
+        }
+    }
+
+    /// A settings command has no words in it in either language.
+    #[test]
+    fn an_english_setting_is_still_a_setting() {
+        // The English half is a *suffix* where the Hebrew is a prefix, which is
+        // why this is its own case rather than a row of the table.
+        for src in [
+            "#הגדרות_רשימות(סמן: ([◆], [–]))",
+            "#lists_config(marker: ([◆], [–]))",
+            "#footnote_config(spacing: 1em)",
+            "#tables_config(inset: 4pt)",
+        ] {
+            assert_eq!(read(src), vec![], "{src} left words behind");
+        }
     }
 
     #[test]

@@ -31,11 +31,11 @@
 //! thousands of characters from the quote, with the preview blank and nothing
 //! pointing at what caused it.
 
-#![doc(html_root_url = "https://docs.rs/girsa-ksav/0.5.0")]
+#![doc(html_root_url = "https://docs.rs/girsa-ksav")]
 
 pub mod read;
 
-pub use read::{read, Block, NoteKind};
+pub use read::{read, Block, NoteKind, ALIASES, PARAM_ALIASES};
 
 use girsa_source::{Range, SourcePacket};
 
