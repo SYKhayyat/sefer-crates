@@ -35,7 +35,21 @@ Three things pay it, and none of them are optional:
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
 
-## 0.5.3 — the marks table, made reachable
+## 0.5.3 — the marks table and the escape list, made reachable
+
+`escape`'s character list is `pub const MARKUP` now. It had ten characters and
+Ksav's editor had five — `\ [ ] # $` against `# [ ] \ $ * _ < > @` — and both
+write `#מראה_מקום(מקור: …)[…]` out of the same Girsa `display` string. The five
+missing are `*` (strong), `_` (emph), `<`/`>` (a label) and `@` (a ref), all of
+which occur in Sefaria titles: one source, two doors, two different documents.
+
+The list itself did not move here. It lives in Ksav's `engine/src/escape.rs`,
+because this crate is a **native-only** dependency there — a browser build has no
+loopback to Girsa — while the escaper is needed in every build. Ksav's
+`engine/tests/from_girsa.rs` holds the two lists together, feeding the whole
+character set through both functions rather than comparing two constants.
+
+
 
 `girsa-hebrew` had the right answer about what a Hebrew word boundary is, and
 Ksav could not get at it. Five items were `pub(crate)`: `fold_final`,

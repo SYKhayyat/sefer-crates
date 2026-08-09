@@ -316,6 +316,21 @@ pub fn refs_in(markup: &str) -> Vec<String> {
     out
 }
 
+/// Every character Typst reads as markup inside a `[…]` body.
+///
+/// Public so it can be *checked*. The same list exists in Ksav — in
+/// `engine/src/escape.rs`, which owns it, because the escaper is needed in
+/// Ksav's browser build and this crate is a native-only dependency there — and
+/// in the editor's TypeScript, which had **five** of the ten. Both write
+/// `#מראה_מקום(מקור: …)[…]` out of the same Girsa `display` string, so the five
+/// missing ones (`*` strong, `_` emph, `<`/`>` a label, `@` a ref, all of which
+/// occur in Sefaria titles) were the difference between one door and the other.
+///
+/// Ksav's `engine/tests/from_girsa.rs` holds the two lists together. That is the
+/// direction that can be run: Ksav compiles this crate, and this crate cannot
+/// compile Ksav.
+pub const MARKUP: &[char] = &['#', '[', ']', '\\', '$', '*', '_', '<', '>', '@'];
+
 /// Escape the characters Typst reads as markup.
 ///
 /// See the module note: an unclosed `[` from an unescaped quote is reported at
@@ -324,10 +339,7 @@ pub fn refs_in(markup: &str) -> Vec<String> {
 pub fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        if matches!(
-            c,
-            '#' | '[' | ']' | '\\' | '$' | '*' | '_' | '<' | '>' | '@'
-        ) {
+        if MARKUP.contains(&c) {
             out.push('\\');
         }
         out.push(c);
