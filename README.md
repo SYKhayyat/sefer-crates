@@ -26,7 +26,7 @@ crates exist to prevent in the first place.
 
 Three things pay it, and none of them are optional:
 
-1. **Exact version pins.** Both apps depend on `=0.5.1`, not `^0.5`. Taking a
+1. **Exact version pins.** Both apps depend on `=0.5.3`, not `^0.5`. Taking a
    new version is a deliberate act on each side.
 2. **CI here builds both dependents.** `tools/check-dependents.sh`, run by
    `.github/workflows/ci.yml`, builds and tests Girsa and Ksav against the
@@ -35,7 +35,45 @@ Three things pay it, and none of them are optional:
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
 
-## 0.5.3 — the marks table and the escape list, made reachable
+## 0.5.3 — the seam stops keying on English prose
+
+### `PostError::code()`, and two frontends that stop reading English
+
+`PostError` is the one error type that **crosses between the repositories**, and
+both applications have to say something about it to a Hebrew reader. Both did it
+by regular expression over its English `Display` — four character-identical
+regexes, `/could not reach|timed out|timeout/i`, `/refused it\b/`,
+`/permission denied|access is denied/i`, `/no such file|os error 2\b/i`, in
+`Girsa/app/src/trouble.ts` and `Ksav/app/src/diagnostics.ts`.
+
+Every word of these strings was load-bearing API between two repositories, in
+the crate that exists so the two sides need not agree in prose. Reword one and
+both halves stay green while a reader stops being told what happened.
+
+Girsa had already written this fix for its **own** error type and tested it:
+`girsa_app::trouble::Code` prints as `no-index: there is no index here`, its
+frontend keys on the name before the colon, and `trouble.test.mjs` asserts
+*"rewording the prose changes nothing a reader sees."* It had never been applied
+here.
+
+- **`PostError::code() -> Option<&'static str>`**, and the code is the first
+  thing `Display` prints, because what crosses to a frontend is a *string*.
+- **`PostError::CODES`**, so each side can sweep it. A frontend with no line for
+  a code prints English into a Hebrew UI, which is the bug Girsa's `presence.ts`
+  and `trouble.ts` both name as their reason for existing.
+- **`Io` and `Json` return `None` on purpose.** They forward the operating
+  system's failure and serde's. Naming them `post-io` would claim a vocabulary
+  this crate does not own, and would stop a frontend reading the words that
+  actually separate `permission denied` from `no such file` — which a reader
+  needs, and which only the OS's own string carries. Matching somebody else's
+  prose is honest; doing it to your own is what this ends.
+
+Both sides now key on the code and both hold `CODES` against their tables from
+Rust: `Ksav/ksav/engine/tests/from_girsa.rs` and Girsa's
+`the_rules_this_repository_wrote_down.rs`.
+
+
+### The escape list, made checkable
 
 `escape`'s character list is `pub const MARKUP` now. It had ten characters and
 Ksav's editor had five — `\ [ ] # $` against `# [ ] \ $ * _ < > @` — and both
@@ -49,7 +87,7 @@ loopback to Girsa — while the escaper is needed in every build. Ksav's
 `engine/tests/from_girsa.rs` holds the two lists together, feeding the whole
 character set through both functions rather than comparing two constants.
 
-
+### The marks table, made reachable
 
 `girsa-hebrew` had the right answer about what a Hebrew word boundary is, and
 Ksav could not get at it. Five items were `pub(crate)`: `fold_final`,

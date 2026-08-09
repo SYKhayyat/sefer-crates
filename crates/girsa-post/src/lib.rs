@@ -139,22 +139,82 @@ pub struct Endpoint {
 }
 
 /// Why the post could not be delivered.
+///
+/// # The `code:` prefix is the API; the words after it are not
+///
+/// This is the one error type that **crosses the seam**, and both applications
+/// have to say something to a reader about it in Hebrew. Until now both did it
+/// by regular expression over the English `Display` above — four
+/// character-identical regexes, `/could not reach|timed out|timeout/i`,
+/// `/refused it\b/`, `/permission denied|access is denied/i`, `/no such file|os
+/// error 2\b/i`, in `Girsa/app/src/trouble.ts` and `Ksav/app/src/diagnostics.ts`
+/// — which made every word of these strings load-bearing API, in a crate that
+/// exists so the two sides need not agree in prose.
+///
+/// Girsa had already written the fix for its **own** error type and tested it:
+/// `girsa_app::trouble::Code` prints as `no-index: there is no index here`, its
+/// frontend keys on the name in front of the colon, and
+/// `trouble.test.mjs` asserts *"rewording the prose changes nothing a reader
+/// sees."* It was never applied here — to the only type that actually crosses
+/// between repositories.
+///
+/// So the refusals this crate makes carry a name. See [`PostError::code`].
 #[derive(Debug, thiserror::Error)]
 pub enum PostError {
-    #[error("{0} is not running")]
+    #[error("post-not-running: {0} is not running")]
     NotRunning(App),
-    #[error("could not reach {app}: {source}")]
+    #[error("post-unreachable: could not reach {app}: {source}")]
     Unreachable {
         app: App,
         #[source]
         source: std::io::Error,
     },
-    #[error("{app} refused it: {status} {body}")]
+    #[error("post-refused: {app} refused it: {status} {body}")]
     Refused { app: App, status: u16, body: String },
+    /// Not coded, deliberately — see [`PostError::code`].
     #[error("{0}")]
     Io(#[from] std::io::Error),
+    /// Not coded, deliberately — see [`PostError::code`].
     #[error("{0}")]
     Json(#[from] serde_json::Error),
+}
+
+impl PostError {
+    /// The name this crate puts on the refusal, or `None` when the refusal is
+    /// not this crate's to name.
+    ///
+    /// **`Io` and `Json` return `None` on purpose.** They are the operating
+    /// system's failure and serde's, forwarded; naming them `post-io` would
+    /// claim a vocabulary this crate does not own, and would *stop* a frontend
+    /// from reading the words that actually distinguish `permission denied` from
+    /// `no such file` — the reader needs those two told apart, and only the OS's
+    /// own string can do it. Matching somebody else's `Display` by its words is
+    /// honest; doing it to your own, when you could have said the name, is the
+    /// thing this method ends.
+    ///
+    /// The code is also the first thing [`Display`](std::fmt::Display) prints,
+    /// as `name: sentence`, because what crosses to a frontend is a *string* —
+    /// a JSON body or a `title` attribute — and there is nowhere else to put it.
+    /// That is the convention `girsa_app::trouble::Code` already established on
+    /// Girsa's side.
+    #[must_use]
+    pub const fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::NotRunning(_) => Some("post-not-running"),
+            Self::Unreachable { .. } => Some("post-unreachable"),
+            Self::Refused { .. } => Some("post-refused"),
+            Self::Io(_) | Self::Json(_) => None,
+        }
+    }
+
+    /// Every code this crate can send, for a frontend's test to sweep.
+    ///
+    /// A frontend that has no line for one of these prints the English through
+    /// to a Hebrew reader — which is the original bug both `trouble.ts` and
+    /// `presence.ts` cite as their reason for existing. So the list is exported
+    /// rather than described, and each side asserts it can answer all of it.
+    pub const CODES: &'static [&'static str] =
+        &["post-not-running", "post-unreachable", "post-refused"];
 }
 
 impl Endpoint {
@@ -590,5 +650,71 @@ mod tests {
             other => panic!("expected stale, got {other:?}"),
         }
         Endpoint::withdraw(app);
+    }
+
+    /// Every coded refusal prints its name first, and every name is in `CODES`.
+    ///
+    /// The frontends split on the first `": "` and look the name up. A variant
+    /// that gained a code without gaining a `Display` prefix would be a code no
+    /// reader ever sees; one that gained a prefix without joining `CODES` would
+    /// be a code the frontends' own sweeps cannot know to answer. Both are
+    /// silent, and both are caught here.
+    #[test]
+    fn every_code_is_the_first_thing_the_message_says() {
+        let errors = [
+            PostError::NotRunning(App::Ksav),
+            PostError::Unreachable {
+                app: App::Ksav,
+                source: std::io::Error::new(std::io::ErrorKind::TimedOut, "timed out"),
+            },
+            PostError::Refused {
+                app: App::Ksav,
+                status: 403,
+                body: "no".into(),
+            },
+            PostError::Io(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file")),
+        ];
+        let mut seen = Vec::new();
+        for e in &errors {
+            let said = e.to_string();
+            match e.code() {
+                Some(code) => {
+                    assert!(
+                        said.starts_with(&format!("{code}: ")),
+                        "{said:?} does not lead with its code {code:?}"
+                    );
+                    assert!(
+                        PostError::CODES.contains(&code),
+                        "{code:?} is not in PostError::CODES, so no frontend sweep can find it"
+                    );
+                    seen.push(code);
+                }
+                // An uncoded error must not accidentally look coded: the
+                // frontends split on the first `": "`, and `Io`'s message is
+                // the operating system's, which may well contain one.
+                None => assert!(
+                    !said.starts_with("post-"),
+                    "{said:?} looks coded and is not"
+                ),
+            }
+        }
+        assert_eq!(seen.len(), PostError::CODES.len(), "a code was not exercised");
+    }
+
+    /// The words after the colon are not API, and this is the test that says so.
+    #[test]
+    fn the_prose_can_be_reworded_without_moving_a_code() {
+        let e = PostError::Refused {
+            app: App::Ksav,
+            status: 403,
+            body: "whatever the far side said".into(),
+        };
+        assert_eq!(e.code(), Some("post-refused"));
+        // The reader's sentence is chosen by the name; the rest is detail on a
+        // hover. `girsa_app::trouble::Code` established this shape, and this is
+        // the type that actually crosses between repositories.
+        let (code, rest) = e.to_string().split_once(": ").expect("a coded message");
+        assert_eq!(code, "post-refused");
+        assert!(rest.contains("whatever the far side said"));
     }
 }
