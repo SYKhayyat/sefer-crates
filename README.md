@@ -35,6 +35,28 @@ Three things pay it, and none of them are optional:
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
 
+## 0.5.3 — the marks table, made reachable
+
+`girsa-hebrew` had the right answer about what a Hebrew word boundary is, and
+Ksav could not get at it. Five items were `pub(crate)`: `fold_final`,
+`fold_quote_mark`, `FINAL_FORMS`, `CANONICAL_GERESH`, `CANONICAL_GERSHAYIM`.
+Two predicates did not exist at all — `is_geresh` and `is_gershayim`, kept
+separate because Hebrew uses the two marks differently and a reader that cannot
+tell them apart gets both rules wrong.
+
+That mattered more than an ordinary missing accessor, because the crate was
+**already inside Ksav's binary** — resolved through `girsa-source` → `girsa-ref`
+— while `ksav/engine/src/spell/hebrew.rs` hand-wrote `is_hebrew_mark` as the
+whole `U+0591–U+05C7` block with nothing excluded. Four characters in that block
+separate words: ־ maqaf, ׀ paseq, ׃ sof pasuq, ׆ nun hafukha. Stripping them
+glued `אֶת־הַשָּׁמַיִם` into `אתהשמים`, and since sof pasuq ends every verse, the
+Hebrew speller silently declined to check **every unpointed pasuk**. Its lexicon
+builder had made the identical omission in Python, so the shipped dictionary
+carried the glue as vocabulary and the two wrong copies agreed with each other.
+
+Nothing in this crate was wrong. It was unreachable, which turned out to be the
+same thing.
+
 ## 0.5.2 — an English Ksav document has a shape too
 
 `read()` matched **Hebrew command names only**. Every command in Ksav is bound

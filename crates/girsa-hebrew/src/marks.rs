@@ -56,7 +56,7 @@ pub fn is_hebrew_letter(c: char) -> bool {
 /// what it means, so folding them costs nothing and buys a great deal: it is
 /// what lets `מלך` be found inside `מלכים`, and what keeps a peeled prefix from
 /// leaving a final letter stranded in the middle of a stem.
-pub(crate) const FINAL_FORMS: [(char, char); 5] = [
+pub const FINAL_FORMS: [(char, char); 5] = [
     ('\u{05DA}', '\u{05DB}'), // ך → כ
     ('\u{05DD}', '\u{05DE}'), // ם → מ
     ('\u{05DF}', '\u{05E0}'), // ן → נ
@@ -67,7 +67,7 @@ pub(crate) const FINAL_FORMS: [(char, char); 5] = [
 /// Fold a final letter to its medial form. Any other character is returned
 /// unchanged.
 #[must_use]
-pub(crate) fn fold_final(c: char) -> char {
+pub fn fold_final(c: char) -> char {
     match FINAL_FORMS.iter().find(|(final_form, _)| *final_form == c) {
         Some((_, medial)) => *medial,
         None => c,
@@ -97,9 +97,27 @@ const GERSHAYIM_FORMS: [char; 4] = [
 ];
 
 /// The single character every geresh folds to.
-pub(crate) const CANONICAL_GERESH: char = '\'';
+pub const CANONICAL_GERESH: char = '\'';
 /// The single character every gershayim folds to.
-pub(crate) const CANONICAL_GERSHAYIM: char = '"';
+pub const CANONICAL_GERSHAYIM: char = '"';
+
+/// Is this any of the four spellings of a geresh?
+///
+/// Separate from [`is_gershayim`] because Hebrew uses the two marks
+/// differently, and a reader that cannot tell them apart gets both rules wrong:
+/// gershayim sit **between** letters in an acronym (`שו״ע`, `ע״ב`), while a
+/// geresh is also an abbreviation marker at the **end** of a word (`תוס׳`,
+/// `סי׳`). Ksav's speller turns on exactly that distinction — see its `joins`.
+#[must_use]
+pub fn is_geresh(c: char) -> bool {
+    GERESH_FORMS.contains(&c)
+}
+
+/// Is this any of the four spellings of gershayim?
+#[must_use]
+pub fn is_gershayim(c: char) -> bool {
+    GERSHAYIM_FORMS.contains(&c)
+}
 
 /// Fold any of the geresh or gershayim spellings to its canonical character.
 ///
@@ -108,7 +126,7 @@ pub(crate) const CANONICAL_GERSHAYIM: char = '"';
 /// in the abbreviation table. Removing it is offered separately, as
 /// [`crate::VariantKind::GershayimDropped`].
 #[must_use]
-pub(crate) fn fold_quote_mark(c: char) -> Option<char> {
+pub fn fold_quote_mark(c: char) -> Option<char> {
     if GERESH_FORMS.contains(&c) {
         Some(CANONICAL_GERESH)
     } else if GERSHAYIM_FORMS.contains(&c) {
