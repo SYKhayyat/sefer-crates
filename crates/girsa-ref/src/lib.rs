@@ -49,7 +49,7 @@ pub mod resolve;
 
 pub use address::{Address, Level};
 pub use lexicon::{Lexicon, Work};
-pub use redirect::RedirectTable;
+pub use redirect::{RedirectTable, MAX_REDIRECT_DEPTH};
 pub use reference::{Ref, RefError};
 pub use resolve::{resolve, resolve_in_context, Context, Resolution};
 

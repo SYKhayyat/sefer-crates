@@ -21,9 +21,24 @@ pub struct RedirectTable {
     entries: BTreeMap<String, Vec<Ref>>,
 }
 
-/// A chain longer than this is a cycle. Following it forever hangs the reader
-/// instead of showing them a page.
-const MAX_DEPTH: usize = 32;
+/// A redirect chain longer than this is a cycle somebody built by hand.
+///
+/// Following it forever hangs the reader instead of showing them a page.
+///
+/// **Public, and the only one.** There were four caps of 32 across the two
+/// applications — here, `girsa_corpus::store`, `girsa_corpus::standing` and
+/// `girsa_app::shelf` — walking four different structures for one reason, and
+/// `standing.rs` named two of the other three in its own comment and then wrote
+/// its own constant anyway. Four walks is right: they traverse a `Ref` chain, a
+/// `SegmentId` table, an ancestor-and-redirect queue and a position map, and
+/// forcing one walker on them would be a worse abstraction than four honest
+/// ones. Four *numbers* is not right, because they are one claim: **thirty-two
+/// hops is a hand-built loop**, and a repo that changed its mind about that
+/// would want to change it once.
+///
+/// It lives here because this crate owns redirects (spec.md §4.2) and is the one
+/// both applications already depend on.
+pub const MAX_REDIRECT_DEPTH: usize = 32;
 
 impl RedirectTable {
     #[must_use]
@@ -54,7 +69,7 @@ impl RedirectTable {
     }
 
     fn follow_into(&self, r: &Ref, depth: usize, out: &mut Vec<Ref>) {
-        if depth > MAX_DEPTH {
+        if depth > MAX_REDIRECT_DEPTH {
             return;
         }
         match self.entries.get(&r.to_string()) {
