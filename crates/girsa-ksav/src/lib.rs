@@ -195,6 +195,60 @@ pub fn cited_in(markup: &str) -> Vec<Cited> {
     }
     out
 }
+/// The same document, with every citation's ref sent through `moved`.
+///
+/// `moved` is asked about each `girsa:` ref the document stores and answers
+/// with where it should point now, or `None` to leave it alone. What asks it is
+/// `girsa_ref::RedirectTable::follow`, and this is the pen's half of that
+/// errand: Girsa knows a mareh makom moved, and the document holding the old
+/// name is over here.
+///
+/// # One scanner
+///
+/// [`cited_in`]'s own note says a second scanner over this markup would be a
+/// second answer to *what does this document cite*, and that the two would
+/// disagree the first time either grew an argument. Rewriting needs byte
+/// offsets that `Cited` does not carry, and the resolution is this function
+/// rather than a scanner in Ksav: the walk is written once, here, beside the
+/// one that reads.
+///
+/// Only the value of a `מקור:` is touched. A `girsa:` ref sitting in the prose,
+/// in a comment, or in somebody else's markup is not a citation this crate
+/// stores and is not this function's to rewrite.
+#[must_use]
+pub fn retargeted(markup: &str, mut moved: impl FnMut(&str) -> Option<String>) -> String {
+    const KEY: &str = "מקור:";
+    let mut out = String::with_capacity(markup.len());
+    // `written` is how much of `markup` is already in `out`; `base` is where
+    // `rest` begins in it. Two offsets, because the walk is over a shrinking
+    // slice and the edits are into the whole.
+    let mut written = 0usize;
+    let mut base = 0usize;
+    let mut rest = markup;
+    while let Some(found) = rest.find(KEY) {
+        let after_key = found + KEY.len();
+        let tail = &rest[after_key..];
+        let Some(open) = tail.find('"') else { break };
+        let after_open = &tail[open + 1..];
+        let Some(close) = after_open.find('"') else {
+            break;
+        };
+        let value = &after_open[..close];
+        let start = base + after_key + open + 1;
+        let end = start + close;
+        if value.starts_with("girsa:") {
+            if let Some(now) = moved(value) {
+                out.push_str(&markup[written..start]);
+                out.push_str(&now);
+                written = end;
+            }
+        }
+        base = end + 1;
+        rest = &after_open[close + 1..];
+    }
+    out.push_str(&markup[written..]);
+    out
+}
 
 /// `תווים: "4-19"` read back off the markup.
 fn range_in(args: &str) -> Option<Range> {
@@ -638,5 +692,72 @@ mod tests {
         assert_eq!(heading(2, "סוגיא"), "#כותרת2[סוגיא]\n");
         assert_eq!(heading(9, "סוגיא"), "#כותרת6[סוגיא]\n");
         assert_eq!(heading(0, "סוגיא"), "#כותרת1[סוגיא]\n");
+    }
+}
+
+#[cfg(test)]
+mod retargeting {
+    // A panic in a test is a failure report. The workspace bans these in
+    // library code, where a panic would take the reader's window with it.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    #[test]
+    fn a_citation_that_moved_is_rewritten_and_nothing_else_is() {
+        let markup = concat!(
+            "כתב #מקור(מקור: \"girsa:shulchan-arukh/orach-chayim/1:3\", תווים: \"0-12\")[דברים]\n",
+            "ועוד #מקור(מקור: \"girsa:bavli/berakhot/2a:1\")[דברים אחרים]\n",
+            "וכאן girsa:shulchan-arukh/orach-chayim/1:3 בגוף הטקסט, שאינו ציטוט.\n",
+        );
+        let after = retargeted(markup, |old| {
+            (old == "girsa:shulchan-arukh/orach-chayim/1:3")
+                .then(|| "girsa:shulchan-arukh/orach-chayim/1:4".to_string())
+        });
+
+        assert!(after.contains("מקור: \"girsa:shulchan-arukh/orach-chayim/1:4\""));
+        assert!(
+            after.contains("girsa:shulchan-arukh/orach-chayim/1:3 בגוף הטקסט"),
+            "a ref in the prose is not a citation: {after}"
+        );
+        assert!(
+            after.contains("girsa:bavli/berakhot/2a:1"),
+            "a citation nobody moved is untouched: {after}"
+        );
+        assert!(
+            after.contains("תווים: \"0-12\""),
+            "the range is not ours to move"
+        );
+
+        // And the scanner still reads what it wrote, which is the property that
+        // makes rewriting safe at all.
+        let cited = cited_in(&after);
+        assert_eq!(cited.len(), 2);
+        assert_eq!(cited[0].reference, "girsa:shulchan-arukh/orach-chayim/1:4");
+        assert_eq!(cited[1].reference, "girsa:bavli/berakhot/2a:1");
+    }
+
+    #[test]
+    fn moving_nothing_returns_the_document_byte_for_byte() {
+        // The ordinary case — a refresh where nothing was re-segmented — must
+        // not touch the file. A rewriter that normalised whitespace or quoting
+        // on the way through would dirty every document it looked at.
+        let markup = "#מקור(מקור: \"girsa:bavli/berakhot/2a:1\")[מאימתי]";
+        assert_eq!(retargeted(markup, |_| None), markup);
+        assert_eq!(retargeted("", |_| None), "");
+        assert_eq!(retargeted("שום ציטוט כאן", |_| None), "שום ציטוט כאן");
+    }
+
+    #[test]
+    fn the_same_place_cited_twice_moves_twice() {
+        // Two citations of one se'if are two citations, and a rewriter that
+        // stopped at the first would leave the document half-updated — which is
+        // worse than not offering, because it looks done.
+        let markup = concat!(
+            "#מקור(מקור: \"girsa:bavli/berakhot/2a:1\")[א]\n",
+            "#מקור(מקור: \"girsa:bavli/berakhot/2a:1\")[ב]\n",
+        );
+        let after = retargeted(markup, |_| Some("girsa:bavli/berakhot/2a:2".to_string()));
+        assert_eq!(after.matches("2a:2").count(), 2, "{after}");
+        assert!(!after.contains("2a:1"), "{after}");
     }
 }

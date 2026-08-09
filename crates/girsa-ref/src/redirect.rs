@@ -112,6 +112,58 @@ impl RedirectTable {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Every row, in ref order, ready to travel.
+    #[must_use]
+    pub fn rows(&self) -> Vec<Moved> {
+        self.entries
+            .iter()
+            .map(|(from, to)| Moved {
+                from: from.clone(),
+                to: to.iter().map(ToString::to_string).collect(),
+            })
+            .collect()
+    }
+
+    /// Read a table back off the wire.
+    ///
+    /// A row whose `from` will not parse is dropped rather than kept as a key
+    /// nothing can ask about, and a target that will not parse is dropped from
+    /// its row — a redirect to a name this build cannot read is not a place to
+    /// send a reader. A row left with no targets at all is `Gone` said badly
+    /// and is dropped whole.
+    #[must_use]
+    pub fn of_rows(rows: &[Moved]) -> Self {
+        let mut table = Self::new();
+        for row in rows {
+            let Ok(from) = row.from.parse::<Ref>() else {
+                continue;
+            };
+            let to: Vec<Ref> = row.to.iter().filter_map(|r| r.parse().ok()).collect();
+            if to.is_empty() {
+                continue;
+            }
+            table.insert(&from, to);
+        }
+        table
+    }
+}
+
+/// One row of the table, as it travels between the two applications.
+///
+/// Both ends are the **printed ref**, because that is how a ref moves
+/// everywhere else in this system — into a Source Packet's `ref`, into a Ksav
+/// document, into the corpus's own `redirects.jsonl`, whose rows are this shape
+/// one level down (`SegmentId` rather than `Ref`). One spelling, not two.
+///
+/// Strings and not [`Ref`]s because `Ref` is `Display` + `FromStr` and carries
+/// no derive: a serde representation invented for it here would be a second way
+/// to write a ref down, in the crate whose whole job is that there is one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Moved {
+    pub from: String,
+    pub to: Vec<String>,
 }
 
 #[cfg(test)]
@@ -179,5 +231,84 @@ mod tests {
         table.insert(&r("girsa:x/1:1"), vec![r("girsa:x/1:2")]);
         table.insert(&r("girsa:x/1:2"), vec![r("girsa:x/1:1")]);
         assert!(table.follow(&r("girsa:x/1:1")).len() <= 1);
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod travelling {
+    // A panic in a test is a failure report. The workspace bans these in
+    // library code, where a panic would take the reader's window with it.
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    fn r(s: &str) -> Ref {
+        s.parse().unwrap_or_else(|e| panic!("{s}: {e}"))
+    }
+
+    #[test]
+    fn a_table_survives_the_wire() {
+        // The whole reason this type is here rather than in either application:
+        // Girsa knows a mareh makom moved and Ksav is the one holding the
+        // document that says the old name. The fact has to cross, and it
+        // crosses as this.
+        let mut here = RedirectTable::new();
+        here.insert(
+            &r("girsa:shulchan-arukh/orach-chayim/1:3"),
+            vec![
+                r("girsa:shulchan-arukh/orach-chayim/1:3"),
+                r("girsa:shulchan-arukh/orach-chayim/1:4"),
+            ],
+        );
+        here.insert(
+            &r("girsa:bavli/berakhot/2a:1"),
+            vec![r("girsa:bavli/berakhot/2a:2")],
+        );
+
+        let json = serde_json::to_string(&here.rows()).expect("rows serialise");
+        let rows: Vec<Moved> = serde_json::from_str(&json).expect("rows read back");
+        let there = RedirectTable::of_rows(&rows);
+
+        assert_eq!(there.len(), here.len());
+        for original in [
+            "girsa:shulchan-arukh/orach-chayim/1:3",
+            "girsa:bavli/berakhot/2a:1",
+            "girsa:bavli/berakhot/9b:1",
+        ] {
+            assert_eq!(
+                there.follow(&r(original)),
+                here.follow(&r(original)),
+                "{original} lands somewhere else after the trip"
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_naming_something_this_build_cannot_read_is_dropped() {
+        // Both halves, and they are different failures. A `from` that will not
+        // parse is a key nothing can ever ask about — dead weight. A `to` that
+        // will not parse is worse: it is a place to send a reader that does not
+        // exist, and a row left with none of them is `Gone` said badly.
+        let rows = vec![
+            Moved {
+                from: "not a ref".into(),
+                to: vec!["girsa:bavli/berakhot/2a:1".into()],
+            },
+            Moved {
+                from: "girsa:bavli/berakhot/2a:1".into(),
+                to: vec!["also not a ref".into()],
+            },
+            Moved {
+                from: "girsa:bavli/berakhot/3a:1".into(),
+                to: vec!["nonsense".into(), "girsa:bavli/berakhot/3a:2".into()],
+            },
+        ];
+        let table = RedirectTable::of_rows(&rows);
+
+        assert_eq!(table.len(), 1, "one row of the three survives");
+        assert!(!table.is_redirected(&r("girsa:bavli/berakhot/2a:1")));
+        assert_eq!(
+            table.follow(&r("girsa:bavli/berakhot/3a:1")),
+            vec![r("girsa:bavli/berakhot/3a:2")]
+        );
     }
 }
