@@ -478,6 +478,6 @@ going green for the second time in its life for the same reason.
 
 ## Licence
 
-MIT OR Apache-2.0 — see [`LICENSE`](LICENSE). Forced by the sharing with Ksav,
+MIT OR Apache-2.0 — see [`COPYRIGHT`](COPYRIGHT). Forced by the sharing with Ksav,
 and worth understanding before adding a dependency: Zayit, HebMorph and
 Sefaria-ElasticSearch are all copyleft and none of them may be copied from.
