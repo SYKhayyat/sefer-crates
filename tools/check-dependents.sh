@@ -48,6 +48,68 @@ if command -v cygpath >/dev/null 2>&1; then
   here_url="$(cygpath -m "$here")"
 fi
 
+# The same directory again, spelled the way it appears *inside* a package id —
+# which is `path+file://` followed by an absolute path that starts with a slash.
+#
+# The two platforms disagree about who owns that slash. On Linux `$here_url` is
+# `/home/runner/…` and already carries it; `cygpath -m` returns `C:/Users/…` and
+# does not, and cargo writes the drive letter as `path+file:///C:/Users/…`. A
+# pattern that spells the prefix `path+file:///` and then expects `$here_url`
+# after it is therefore asking for four slashes on Linux and three on Windows —
+# so it matched every run on Windows and no run anywhere else, which is why
+# every CI run of this script since it was written has reported that the
+# override did not take. It had taken; the comparison could not see it.
+#
+# Normalising here rather than at the comparison keeps one spelling of the rule:
+# the leading slash belongs to the path, and the literal prefix ends at `//`.
+here_prefix="$here_url"
+[[ "$here_prefix" != /* ]] && here_prefix="/$here_prefix"
+
+# Did this package id come out of the checkout this script is running from?
+#
+# One function and not an inline `case`, so that the self-test below and the
+# assertion in `override_took` are asking the same question of the same pattern.
+# The previous shape had the pattern written once and checked nowhere, which is
+# how it stayed wrong on the only platform CI runs on.
+from_this_checkout() { # $1 = the `"id":"…"` fragment, $2 = the prefix to accept
+  case "$1" in
+    '"id":"path+file://'"$2"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The pattern, against ids from both platforms, before anything is built.
+#
+# This costs nothing and it is the check that was missing: every failure mode
+# here is silent — a pattern that matches nothing reports "the override did not
+# take", and a pattern that matches everything reports success without having
+# compared anything. Both read like a working script.
+self_test() {
+  local linux='/home/runner/work/sefer-crates/sefer-crates/sefer-crates'
+  local windows='C:/Users/someone/sefer-crates'
+  local bad=0
+  # An id from this checkout, on each platform, must be recognised…
+  from_this_checkout \
+    '"id":"path+file:///home/runner/work/sefer-crates/sefer-crates/sefer-crates/crates/girsa-cite#girsa-ref@0.5.3"' \
+    "$linux" || { echo "self-test: a linux path id was not recognised"; bad=1; }
+  from_this_checkout \
+    '"id":"path+file:///C:/Users/someone/sefer-crates/crates/girsa-ksav#0.5.3"' \
+    "/$windows" || { echo "self-test: a windows path id was not recognised"; bad=1; }
+  # …and one that came from the pinned commit must not be.
+  from_this_checkout \
+    '"id":"git+https://github.com/SYKhayyat/sefer-crates?rev=d869ccc#girsa-ref@0.5.3"' \
+    "$linux" && { echo "self-test: a git id was taken for a path id"; bad=1; }
+  # Nor one from a directory that merely starts with the same letters.
+  from_this_checkout \
+    '"id":"path+file:///home/runner/work/sefer-crates/sefer-crates/sefer-crates-old/crates/girsa-ref#0.5.3"' \
+    "$linux" && { echo "self-test: a neighbouring directory was taken for this one"; bad=1; }
+  if [[ $bad -ne 0 ]]; then
+    echo "The check below cannot tell an override from a pin. Refusing to run it."
+    exit 1
+  fi
+}
+self_test
+
 # name -> path to the manifest cargo should be pointed at.
 # Ksav is listed but not yet wired: it gains its girsa-source dependency in W4,
 # and until then building it proves the checkout is healthy and nothing more.
@@ -176,10 +238,7 @@ override_took() {
     while IFS= read -r id; do
       [[ -z "$id" ]] && continue
       found=$((found + 1))
-      case "$id" in
-        '"id":"path+file:///'*"$here_url"/*) ;;
-        *) elsewhere+=("$id") ;;
-      esac
+      from_this_checkout "$id" "$here_prefix" || elsewhere+=("$id")
     done <<< "$mine"
   done
 
