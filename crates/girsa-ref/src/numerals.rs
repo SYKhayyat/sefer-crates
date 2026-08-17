@@ -82,12 +82,44 @@ fn value_of(c: char) -> Option<u32> {
 /// resolves, opens a page, and is wrong. That is the failure mode this whole
 /// crate is built to avoid, so summing is not enough.
 ///
-/// The rule that separates them is how numerals are *written*: **high to low**.
-/// `קכ"א` is 100, 20, 1. `תרצ"ז` is 400, 200, 90, 7. A numeral never goes back
-/// up, and a word does almost immediately — `שבת` is 300, 2, 400, and the 2
-/// gives it away.
+/// The first rule is how numerals are *written*: **high to low**. `קכ"א` is
+/// 100, 20, 1. `תרצ"ז` is 400, 200, 90, 7. A numeral never goes back up, and a
+/// word does almost immediately — `שבת` is 300, 2, 400, and the 2 gives it
+/// away.
 ///
-/// Equal is allowed, because 800 is `תת`.
+/// # Descending is necessary and it is not sufficient
+///
+/// Plenty of words descend. `ייחוד` is 10, 10, 8, 6, 4 and never goes back up,
+/// so it read as 38 — and `ברכות שער ייחוד המעשה ב'` resolved to
+/// `38:המעשה:2`, which is the exact failure this crate exists to refuse. The
+/// descent rule let it through because it was written to allow an equal pair,
+/// for one case: 800 is `תת`.
+///
+/// The second rule closes it, and it is a stronger statement of the same idea:
+/// **a numeral is the canonical spelling of its own value.** Twenty is `כ`, so
+/// `יו"ד` — 10, 6, 4 — is not twenty written some other way, it is not a
+/// numeral at all. Nobody reaches for a smaller letter when a bigger one covers
+/// the amount, which is what makes the spelling of a number unique and what
+/// makes this test decide rather than guess.
+///
+/// | said | sums to | written | read as |
+/// |---|---|---|---|
+/// | `יו"ד` | 20 | `כ'` | nothing — it is Yoreh De'ah |
+/// | `ייחוד` | 38 | `ל"ח` | nothing |
+/// | `בא` | 3 | `ג'` | nothing — it is the parsha |
+/// | `תת` | 800 | `תת` | 800 |
+/// | `ט"ו` | 15 | `ט"ו` | 15 |
+///
+/// By construction it cannot reject a real numeral: every number this crate
+/// writes with [`to_hebrew`] is canonical, and `every_number_a_sefer_could_have`
+/// walks 1 to 20,000 through both directions to say so.
+///
+/// # What it still does not settle
+///
+/// `נח` is 50, 8 — which is exactly how 58 is written. The parsha and the
+/// number are the same string, and no rule about spelling can separate them;
+/// that needs to know which strings are words, which is a lexicon. Stated here
+/// so the next reader does not go looking for a rule that cannot exist.
 #[must_use]
 pub fn parse_hebrew(s: &str) -> Option<u32> {
     let normalized = normalize(s);
@@ -107,6 +139,14 @@ pub fn parse_hebrew(s: &str) -> Option<u32> {
 }
 
 /// Sum the letters, refusing anything that is not written the way a numeral is.
+///
+/// Both rules, in the order that costs least: the descent is a comparison per
+/// letter and throws out most words before anything is allocated, and the
+/// canonical check then throws out the ones that descend anyway.
+///
+/// The comparison is on **values** rather than on characters, so that a final
+/// letter compares equal to its medial form — `ך` is twenty and `כ` is how
+/// twenty is written, and they are the same numeral said two ways.
 fn read_descending(s: &str) -> Option<u32> {
     let letters: Vec<char> = s
         .chars()
@@ -116,6 +156,7 @@ fn read_descending(s: &str) -> Option<u32> {
         return None;
     }
 
+    let mut said = Vec::with_capacity(letters.len());
     let mut total = 0u32;
     let mut previous = u32::MAX;
     for c in letters {
@@ -125,7 +166,17 @@ fn read_descending(s: &str) -> Option<u32> {
         }
         previous = value;
         total = total.checked_add(value)?;
+        said.push(value);
     }
+
+    let canonical: Vec<u32> = to_bare_letters(total)
+        .chars()
+        .filter_map(value_of)
+        .collect();
+    if canonical != said {
+        return None;
+    }
+
     Some(total)
 }
 
@@ -294,6 +345,39 @@ mod tests {
         assert_eq!(parse("Berakhot"), None);
         assert_eq!(parse(""), None);
         assert_eq!(parse("  "), None);
+    }
+
+    /// The words that descend, which the descent rule alone let through.
+    ///
+    /// `ייחוד` is 10, 10, 8, 6, 4 — it never goes back up, so it summed to 38
+    /// and `ברכות שער ייחוד המעשה ב'` resolved to `38:המעשה:2`. `יו"ד` is 10,
+    /// 6, 4 and summed to 20, so Yoreh De'ah arrived as a number and the
+    /// corpus needed a guard to put it back. Neither is written the way its
+    /// own total is written, and that is the whole of the test.
+    #[test]
+    fn a_word_that_descends_is_still_not_a_number() {
+        for (word, sums_to, written) in [
+            ("ייחוד", 38, "ל\"ח"),
+            ("יו\"ד", 20, "כ'"),
+            ("יוד", 20, "כ'"),
+            ("בא", 3, "ג'"),
+            ("שממה", 385, "שפ\"ה"),
+        ] {
+            assert_eq!(parse(word), None, "{word} was read as {sums_to}");
+            // And the number it summed to is written some other way, which is
+            // the reason the word is not it.
+            assert_eq!(to_hebrew(sums_to), written);
+        }
+    }
+
+    /// The one this deliberately cannot separate, so nobody goes looking.
+    ///
+    /// `נח` is 50, 8 — exactly how 58 is written. The parsha and the number
+    /// are the same string and no rule about spelling tells them apart.
+    #[test]
+    fn a_word_written_exactly_as_its_own_number_is_read_as_the_number() {
+        assert_eq!(parse("נח"), Some(58));
+        assert_eq!(to_hebrew(58), "נ\"ח");
     }
 
     #[test]

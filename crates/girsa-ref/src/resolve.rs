@@ -655,24 +655,30 @@ mod tests {
             "girsa:bavli/berakhot/שער הבחינה:2"
         );
 
-        // **And the one it cannot reach, written down rather than hidden.**
+        // **The one this could not reach, and now does.**
         //
-        // `שער ייחוד המעשה` is another of that sefer's sections, and this
-        // resolves it to `38:המעשה:2` — before this change and after it, the
-        // same way. The lookahead asks *is the next token a number*, and
-        // `ייחוד` is י-י-ח-ו-ד: 10, 10, 8, 6, 4, which never goes back up. It
-        // is a legal numeral by the only rule `parse_hebrew` has, and that rule
-        // is the one keeping `ברכות שבת` from being siman 702.
+        // `שער ייחוד המעשה` is another of that sefer's sections, and it used to
+        // resolve to `38:המעשה:2`. The lookahead asks *is the next token a
+        // number*, and `ייחוד` is י-י-ח-ו-ד: 10, 10, 8, 6, 4, which never goes
+        // back up — so it was a legal numeral by the only rule `parse_hebrew`
+        // had. This was asserted here as a limit of the layer, on the reasoning
+        // that telling a name from a numeral needs a lexicon.
         //
-        // So a name whose second word reads as a numeral is out of reach here,
-        // and it is out of reach for the reason the crate is built on rather
-        // than by an oversight. Telling those two apart needs the schema, which
-        // this layer does not have. It is asserted rather than left unspoken:
-        // a limit nobody has written down is a limit somebody rediscovers.
+        // **That reasoning was wrong, and the counter-example was in the sum.**
+        // Thirty-eight is written `ל"ח`. A numeral is not merely a descending
+        // run of letters, it is the *canonical* spelling of its own value, and
+        // no canonical spelling reaches for a smaller letter when a bigger one
+        // covers the amount. `parse_hebrew` checks that now, so `ייחוד` is a
+        // word again and so is `יו"ד`, which used to arrive as twenty.
         assert_eq!(
             resolved("ברכות שער ייחוד המעשה ב'"),
-            "girsa:bavli/berakhot/38:המעשה:2"
+            "girsa:bavli/berakhot/שער ייחוד המעשה:2"
         );
+        // What is genuinely out of reach is narrower than it looked, and it is
+        // pinned in `numerals`: `נח` is 50, 8, which is exactly how 58 is
+        // written. A word spelled the way its own number is spelled cannot be
+        // told from the number by any rule about spelling. *That* one needs a
+        // lexicon; a name whose letters merely descend never did.
 
         // And the half of the rule that keeps every citation above working: a
         // label with a number after it is still a label, in all three of the
