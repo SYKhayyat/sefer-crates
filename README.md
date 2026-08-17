@@ -41,7 +41,7 @@ crates exist to prevent in the first place.
 
 Three things pay it, and none of them are optional:
 
-1. **Exact version pins.** Both apps depend on `=0.5.3`, not `^0.5`. Taking a
+1. **Exact version pins.** Both apps depend on `=0.5.4`, not `^0.5`. Taking a
    new version is a deliberate act on each side.
 2. **CI here builds both dependents.** `tools/check-dependents.sh`, run by
    `.github/workflows/ci.yml`, builds and tests Girsa and Ksav against the
@@ -49,6 +49,44 @@ Three things pay it, and none of them are optional:
    rather than weeks later inside an app.
 3. **The Source Packet carries a schema version.** A mismatched pair fails
    loudly at the handshake instead of quietly mis-rendering a citation.
+
+## 0.5.4 — a level word at the head of a name is part of the name
+
+`parse_address` skipped a word off `SECTION_WORDS` wherever it found one, on the
+reading that those words are labels: `סימן א` is a label and a number, so the
+label goes and the number stays.
+
+Half of those words are also the **first word of the name of a level**.
+`הלכות ברכות` is what the Avudraham's schema calls that section and `ברכות` is a
+name it does not have; `שער הבחינה` is one of Chovos HaLevavos's and
+`הבחינה` is not. Taking the head off handed back a section no schema had, and
+the citation then failed to land — or landed somewhere else, which from outside
+looked the same.
+
+The rule is one token of lookahead. **A label labels the number after it**, and
+a word after it means it was never a label. That settles it without knowing
+anything about the schema, because the two readings differ in exactly that
+place, and every citation in
+`the_words_the_corpus_uses_for_a_level_are_read_as_labels` is the first shape.
+
+Measured, on Girsa's shelf, with
+`cargo run -p girsa-search --example measure-branch-citations -- corpus` — 7,627
+chalakim asked for by name:
+
+| | landed | missed |
+|---|---|---|
+| 0.5.3 | 5,502 | 2,125 |
+| 0.5.4 | **6,057** | 1,570 |
+
+**555 more, and a quarter of the misses gone.**
+
+One thing it deliberately does not reach, and there is a test asserting the
+current answer rather than a comment hoping somebody notices.
+`שער ייחוד המעשה` still resolves as `38:המעשה`, because `ייחוד` is י-י-ח-ו-ד —
+10, 10, 8, 6, 4, which never goes back up — and is therefore a legal numeral by
+the only rule `parse_hebrew` has. That rule is what keeps `ברכות שבת` from being
+siman 702. Telling a word from a numeral there needs the schema, which this
+layer does not have.
 
 ## 0.5.3 — the seam stops keying on English prose
 

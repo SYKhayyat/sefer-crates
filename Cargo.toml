@@ -10,10 +10,10 @@ members = [
 ]
 
 # Every crate here is compiled into BOTH Girsa and Ksav. The version is shared
-# and bumped as one unit: a consumer pins an exact version (`=0.5.3`), so a
+# and bumped as one unit: a consumer pins an exact version (`=0.5.4`), so a
 # mismatched pair is a resolution error rather than a runtime surprise.
 [workspace.package]
-version = "0.5.3"
+version = "0.5.4"
 edition = "2021"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -21,12 +21,12 @@ repository = "https://github.com/SYKhayyat/sefer-crates"
 authors = ["Shaul Khayyat"]
 
 [workspace.dependencies]
-girsa-hebrew = { version = "=0.5.3", path = "crates/girsa-hebrew" }
-girsa-ref = { version = "=0.5.3", path = "crates/girsa-ref" }
-girsa-source = { version = "=0.5.3", path = "crates/girsa-source" }
-girsa-cite = { version = "=0.5.3", path = "crates/girsa-cite" }
-girsa-post = { version = "=0.5.3", path = "crates/girsa-post" }
-girsa-ksav = { version = "=0.5.3", path = "crates/girsa-ksav" }
+girsa-hebrew = { version = "=0.5.4", path = "crates/girsa-hebrew" }
+girsa-ref = { version = "=0.5.4", path = "crates/girsa-ref" }
+girsa-source = { version = "=0.5.4", path = "crates/girsa-source" }
+girsa-cite = { version = "=0.5.4", path = "crates/girsa-cite" }
+girsa-post = { version = "=0.5.4", path = "crates/girsa-post" }
+girsa-ksav = { version = "=0.5.4", path = "crates/girsa-ksav" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

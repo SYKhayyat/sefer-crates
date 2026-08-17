@@ -325,6 +325,18 @@ const AMUD_MARKERS: [(&str, char); 2] = [("ע\"א", 'a'), ("ע\"ב", 'b')];
 /// two-letter head is never a label.
 const LABEL_LETTERS: [char; 5] = ['פ', 'ה', 'ס', 'ד', 'מ'];
 
+/// Whether a token reads as a **numbered** level on its own.
+///
+/// The three branches of the loop below that produce a number, asked as a
+/// question instead of taken as an answer — so a label word can look at what
+/// follows it before deciding it is labelling anything. See [`parse_address`],
+/// where that decision is made and why it has to be.
+fn is_numbered(token: &str) -> bool {
+    crate::daf::parse(token).is_some()
+        || split_label_and_number(token).is_some()
+        || numerals::parse(token).is_some()
+}
+
 /// Read whatever address is left after the title has been taken off.
 fn parse_address(rest: &str) -> Option<Address> {
     let mut levels: Vec<Level> = Vec::new();
@@ -342,7 +354,8 @@ fn parse_address(rest: &str) -> Option<Address> {
         };
     }
 
-    for token in split_tokens(rest) {
+    let tokens = split_tokens(rest);
+    for (nth, token) in tokens.iter().enumerate() {
         let token = token.trim();
         if token.is_empty() {
             continue;
@@ -352,9 +365,43 @@ fn parse_address(rest: &str) -> Option<Address> {
         let had_geresh = normalized.ends_with('\'') || normalized.ends_with('"');
         let bare = normalized.trim_end_matches(['\'', '"']);
 
-        if SECTION_WORD_SET.contains(bare) || (had_geresh && SECTION_ABBREVIATIONS.contains(&bare))
-        {
-            continue;
+        // **A label word labels the number after it, and where there is no
+        // number after it, it is part of a name.**
+        //
+        // This used to skip the word unconditionally, and the cost was 2,125
+        // chalakim of Girsa's shelf. Half the level words on the list are also
+        // the first word of the *name* of a level: `הלכות ברכות` is what the
+        // Avudraham's schema calls that section, and `שער ייחוד המעשה` is what
+        // Chovos HaLevavos calls one of its. Stripping the head handed back
+        // `ברכות` and `ייחוד המעשה`, which are names no schema has — and the
+        // citation then failed to land, or landed somewhere else, with nothing
+        // saying which had happened.
+        //
+        // Looking ahead one token settles it without knowing anything about the
+        // schema, because the two readings differ in exactly that place.
+        // `סימן א` is a label and a number; `הלכות ברכות` is two words of one
+        // name. Every citation in `the_words_the_corpus_uses_for_a_level_are_read_as_labels`
+        // is the first shape, which is what makes this safe: a label with a
+        // number after it is still a label.
+        let is_label = SECTION_WORD_SET.contains(bare)
+            || (had_geresh && SECTION_ABBREVIATIONS.contains(&bare));
+        if is_label {
+            match tokens.get(nth + 1).map(|next| is_numbered(next.trim())) {
+                // A label with a number after it. What it always was.
+                Some(true) | None => continue,
+                // A label with a *word* after it, which is the case this is
+                // about: it is the head of a name and not a label at all.
+                //
+                // It must go on `pending_name` and not fall through, because
+                // what is below it is the numeral reader — and every one of
+                // these words is also a number. `סעיף` reads as 220, which is
+                // how `שוע אוח סימן א סעיף א` once resolved to `160:1:220:1`:
+                // four levels, all wrong, and it resolved.
+                Some(false) => {
+                    pending_name.push(token.to_string());
+                    continue;
+                }
+            }
         }
 
         // `ע"א` is not a level of its own — it says which side of the daf the
@@ -581,6 +628,70 @@ mod tests {
             resolved("ברכות חלק ב' פירוש ד'"),
             "girsa:bavli/berakhot/2:4"
         );
+    }
+
+    #[test]
+    fn a_level_word_at_the_head_of_a_name_is_part_of_the_name() {
+        // **The 2,125.** Girsa measured how many of its shelf's chalakim a
+        // typed mareh makom lands on, and this was the largest single reason
+        // the rest did not: half the words on `SECTION_WORDS` are also the
+        // first word of the *name* of a section, and the head was being taken
+        // off before the name was looked up.
+        //
+        // `הלכות ברכות` is what the Avudraham's schema calls that section, and
+        // `ברכות` is a name it does not have. Nothing said so — the citation
+        // failed to land, or landed elsewhere, and both looked the same from
+        // outside.
+        //
+        // The rule is one token of lookahead: a label labels the number after
+        // it, and a word after it means it was never a label.
+        assert_eq!(
+            resolved("ברכות הלכות ברכות ג'"),
+            "girsa:bavli/berakhot/הלכות ברכות:3"
+        );
+        // The same shape with the level word Chovos HaLevavos uses.
+        assert_eq!(
+            resolved("ברכות שער הבחינה ב'"),
+            "girsa:bavli/berakhot/שער הבחינה:2"
+        );
+
+        // **And the one it cannot reach, written down rather than hidden.**
+        //
+        // `שער ייחוד המעשה` is another of that sefer's sections, and this
+        // resolves it to `38:המעשה:2` — before this change and after it, the
+        // same way. The lookahead asks *is the next token a number*, and
+        // `ייחוד` is י-י-ח-ו-ד: 10, 10, 8, 6, 4, which never goes back up. It
+        // is a legal numeral by the only rule `parse_hebrew` has, and that rule
+        // is the one keeping `ברכות שבת` from being siman 702.
+        //
+        // So a name whose second word reads as a numeral is out of reach here,
+        // and it is out of reach for the reason the crate is built on rather
+        // than by an oversight. Telling those two apart needs the schema, which
+        // this layer does not have. It is asserted rather than left unspoken:
+        // a limit nobody has written down is a limit somebody rediscovers.
+        assert_eq!(
+            resolved("ברכות שער ייחוד המעשה ב'"),
+            "girsa:bavli/berakhot/38:המעשה:2"
+        );
+
+        // And the half of the rule that keeps every citation above working: a
+        // label with a number after it is still a label, in all three of the
+        // notations a number arrives in.
+        assert_eq!(resolved("ברכות סימן ג'"), "girsa:bavli/berakhot/3");
+        assert_eq!(resolved("ברכות דף ב."), "girsa:bavli/berakhot/2a");
+        assert_eq!(
+            resolved("רמב\"ם הל' תפילה פ\"ד ה\"א"),
+            "girsa:mishneh-torah/tefilah/4:1"
+        );
+
+        // A label word must never reach the numeral reader, whichever branch
+        // it leaves by. Every one of these words is also a number — `סעיף` is
+        // 220 — and a citation that resolved through one of them would be four
+        // levels of nonsense that looked like an address.
+        // Refused, both ways round, which is the right answer: a citation
+        // naming a level and no number has not named a place.
+        assert_eq!(resolved("ברכות סעיף"), "UNRESOLVED");
+        assert_eq!(resolved("ברכות הלכות סעיף"), "UNRESOLVED");
     }
 
     #[test]
