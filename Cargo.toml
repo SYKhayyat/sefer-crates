@@ -5,6 +5,7 @@ members = [
     "crates/girsa-hebrew",
     "crates/girsa-ref",
     "crates/girsa-cite",
+    "crates/girsa-alive",
     "crates/girsa-post",
     "crates/girsa-ksav",
 ]
@@ -25,6 +26,7 @@ girsa-hebrew = { version = "=0.5.6", path = "crates/girsa-hebrew" }
 girsa-ref = { version = "=0.5.6", path = "crates/girsa-ref" }
 girsa-source = { version = "=0.5.6", path = "crates/girsa-source" }
 girsa-cite = { version = "=0.5.6", path = "crates/girsa-cite" }
+girsa-alive = { version = "=0.5.6", path = "crates/girsa-alive" }
 girsa-post = { version = "=0.5.6", path = "crates/girsa-post" }
 girsa-ksav = { version = "=0.5.6", path = "crates/girsa-ksav" }
 
@@ -33,6 +35,11 @@ serde_json = "1"
 thiserror = "2"
 
 [workspace.lints.rust]
+# Forbidden, not merely denied — and `girsa-alive` is the one crate that does
+# not take this table. It exists so that *is this process alive* has somewhere
+# to live: the question has no safe spelling, and the alternative was a `pid`
+# field documented as a check nobody had written. Every `unsafe` block in this
+# workspace is in that crate's `lib.rs`.
 unsafe_code = "forbid"
 
 [workspace.lints.clippy]

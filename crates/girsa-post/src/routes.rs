@@ -9,22 +9,34 @@
 //! and nothing recorded which direction a path ran in — which is how
 //! `/document` came to mean two unrelated errands:
 //!
-//! * Ksav → Girsa, it carries `{path, name, forget}` and means **a document is
+//! * Ksav → Girsa, it carried `{path, name, forget}` and meant **a document is
 //!   saved here, put it in the registry** (or take it out).
-//! * Girsa → Ksav, it carries `{name, text}` and means **take this document**.
+//! * Girsa → Ksav, it carried `{name, text}` and meant **take this document**.
 //!
 //! One name, two errands, one shared crate, and nothing on either side that
-//! said so. Both are below, under names that cannot be confused, with the
-//! direction in the name.
+//! said so.
 //!
-//! # The wire strings have not changed
+//! # The rename, and why it did not need a flag day
 //!
-//! [`girsa::DOCUMENT`] and [`ksav::DOCUMENT`] are both still `"/document"`,
-//! because a rename is only safe when both servers rename at once and this
-//! repository is not both servers. What this module buys today is that the
-//! collision is *stated* rather than latent, and that the rename, when the two
-//! applications take it together, is one edit here rather than a search across
-//! two trees. See [`COLLISION`] for the pair that has to move.
+//! They are [`girsa::DOCUMENT_SAVED`] and [`ksav::TAKE_DOCUMENT`] now. The
+//! direction is in the name, so neither can be read as the other.
+//!
+//! The reason this was held open as *blocked* for a release is worth writing
+//! down, because the reasoning was wrong: a rename looked like it required both
+//! servers to move in the same commit, which two repositories cannot do. They
+//! do not have to. A path collides only across the seam, never within one
+//! server — each of them serves exactly one errand under `/document` and always
+//! did. So each side can accept the old name as well as the new one, and each
+//! sender can fall back to the old one when the other side answers 404. Any
+//! pairing of an old and a new build works, in either combination, and the
+//! repositories land whenever they land.
+//!
+//! [`girsa::LEGACY_DOCUMENT`] and [`ksav::LEGACY_DOCUMENT`] are that
+//! compatibility, kept here so the eventual deletion is also one edit. They can
+//! go once no build old enough to speak them is installed anywhere — the
+//! senders' fallback first, then the servers' acceptance, in that order and not
+//! the other, since a sender that has stopped falling back is harmless and a
+//! server that has stopped accepting is not.
 
 /// Answered by both applications, in both directions: *are you there, and which
 /// version*. The one path that is not an errand.
@@ -37,8 +49,16 @@ pub mod girsa {
     /// `{path, name, forget}` — a document is saved at this path, put it in the
     /// registry, or with `forget` take it out.
     ///
-    /// Not [`super::ksav::DOCUMENT`]. See the module note.
-    pub const DOCUMENT: &str = "/document";
+    /// Not [`super::ksav::TAKE_DOCUMENT`], which is the other direction and a
+    /// different errand. See the module note.
+    pub const DOCUMENT_SAVED: &str = "/document-saved";
+
+    /// What [`DOCUMENT_SAVED`] was called before the direction was in the name.
+    ///
+    /// **Accepted, never sent.** A Ksav built before the rename still calls it,
+    /// and a save must not fail because the two applications updated on
+    /// different days.
+    pub const LEGACY_DOCUMENT: &str = "/document";
 
     /// Re-quote every citation in a document against the corpus as it stands
     /// now.
@@ -61,50 +81,77 @@ pub mod girsa {
 pub mod ksav {
     /// `{name, text}` — take this document.
     ///
-    /// Not [`super::girsa::DOCUMENT`]. See the module note.
-    pub const DOCUMENT: &str = "/document";
+    /// Not [`super::girsa::DOCUMENT_SAVED`], which is the other direction and a
+    /// different errand. See the module note.
+    pub const TAKE_DOCUMENT: &str = "/take-document";
+
+    /// What [`TAKE_DOCUMENT`] was called before the direction was in the name.
+    ///
+    /// **Accepted, never sent.** See [`super::girsa::LEGACY_DOCUMENT`].
+    pub const LEGACY_DOCUMENT: &str = "/document";
 
     /// `{…SourcePacket}` — put this source into the document being written.
     pub const INSERT: &str = "/insert";
 }
 
-/// The one pair of paths that means two things, kept here so a sweep can find
-/// it and so the rename has somewhere to start.
+/// The pair that used to mean two things under one name, kept as the record
+/// that it did and as the list of what a sweep has to check.
 ///
-/// When the two applications are ready to rename together, this constant is the
-/// list of what moves. A test in either repository can assert against it that
-/// the collision is still the only one.
-pub const COLLISION: (&str, &str) = (girsa::DOCUMENT, ksav::DOCUMENT);
+/// `.0` is what Girsa serves, `.1` is what Ksav serves. They differ now; the
+/// test below is what holds them apart.
+pub const RENAMED: (&str, &str) = (girsa::DOCUMENT_SAVED, ksav::TAKE_DOCUMENT);
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The collision is real, and it is the only one.
+    /// The collision is gone, and no other path has taken its place.
     ///
-    /// If this ever goes green by the two paths differing, the rename has
-    /// happened and this test becomes the record that it did.
+    /// This test was written the other way round — asserting the collision was
+    /// real and was the only one — while the rename was thought to need both
+    /// servers in one commit. It is the record that the rename happened.
     #[test]
-    fn document_still_means_two_things_and_nothing_else_does() {
-        assert_eq!(COLLISION.0, COLLISION.1, "the rename has not happened yet");
+    fn no_path_serves_two_errands_under_one_name() {
+        assert_ne!(RENAMED.0, RENAMED.1, "the rename is what this file is for");
 
         let girsa = [
-            girsa::DOCUMENT,
+            girsa::DOCUMENT_SAVED,
             girsa::REFRESH,
             girsa::WHERE_FROM,
             girsa::LINKIFY,
         ];
-        let ksav = [ksav::DOCUMENT, ksav::INSERT];
+        let ksav = [ksav::TAKE_DOCUMENT, ksav::INSERT];
         let shared: Vec<&str> = girsa.iter().filter(|p| ksav.contains(p)).copied().collect();
-        assert_eq!(
-            shared,
-            vec![girsa::DOCUMENT],
-            "a second path serving two errands under one name, unnamed"
+        assert!(
+            shared.is_empty(),
+            "a path serving two errands under one name: {shared:?}"
         );
 
         // `/health` is answered by both and is not a collision: it is the same
         // question with the same answer in both directions, which is the whole
         // difference.
         assert!(!girsa.contains(&HEALTH) && !ksav.contains(&HEALTH));
+    }
+
+    /// The compatibility name is the *old* name on both sides, and it is not
+    /// any live path.
+    ///
+    /// Both sides accepting one string is safe precisely because a server sees
+    /// only its own direction. What would not be safe is the old name
+    /// surviving as a live errand somewhere, which is what this asserts against.
+    #[test]
+    fn the_legacy_name_is_only_a_legacy_name() {
+        assert_eq!(girsa::LEGACY_DOCUMENT, ksav::LEGACY_DOCUMENT);
+        for live in [
+            girsa::DOCUMENT_SAVED,
+            girsa::REFRESH,
+            girsa::WHERE_FROM,
+            girsa::LINKIFY,
+            ksav::TAKE_DOCUMENT,
+            ksav::INSERT,
+            HEALTH,
+        ] {
+            assert_ne!(live, girsa::LEGACY_DOCUMENT);
+        }
     }
 }

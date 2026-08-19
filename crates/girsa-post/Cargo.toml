@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+# The one crate here allowed to ask the operating system anything. `presence`
+# uses it to rule a crashed sibling out without paying a connect timeout; see
+# `Endpoint::pid`.
+girsa-alive = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

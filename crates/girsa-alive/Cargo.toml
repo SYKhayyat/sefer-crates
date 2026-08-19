@@ -1,0 +1,28 @@
+[package]
+name = "girsa-alive"
+description = "Is this process still running? The one crate here that may call the operating system."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# **This crate does not take `lints.workspace = true`, and that is the whole
+# point of it existing separately.**
+#
+# The workspace sets `unsafe_code = "forbid"`, which is not a style preference:
+# these crates parse refs and print citations, and none of them has any business
+# talking to the kernel. Asking *is this process alive* has no safe spelling —
+# `kill(pid, 0)` and `OpenProcess` are foreign calls — so the choice was never
+# "write it safely", it was "one small crate that may, or nowhere at all".
+#
+# So the exception is a whole crate, three functions wide, with the unsafe
+# confined to the two blocks in `src/lib.rs` that make the call. Anything that
+# is not a foreign call does not belong in here.
+[lints.rust]
+unsafe_code = "allow"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

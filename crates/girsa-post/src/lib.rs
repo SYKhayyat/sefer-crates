@@ -134,27 +134,30 @@ pub struct Endpoint {
     pub port: u16,
     /// Minted per run. See the module note for why it exists on localhost.
     pub token: String,
-    /// Which process wrote this file. **For a person reading it, not for the
-    /// code reading it** — nothing here asks the operating system whether that
-    /// process is still alive, and this field is not a staleness check.
+    /// Which process wrote this file, and the one thing that can be concluded
+    /// from it: if nothing holds that pid, whatever wrote this file is gone.
     ///
-    /// It used to say it was one. It said *"so a stale file can be told from a
-    /// live one before anything is sent"*, and no such telling existed: `send`
-    /// goes straight to `TcpStream::connect_timeout`, which is why a stale
-    /// endpoint costs a timeout rather than a question. A documented mechanism
-    /// that is not there is worse than an absent one, because the next reader
-    /// trusts it.
+    /// # It says less than it looks like it says
     ///
-    /// It cannot become one here, either. Every way to ask *is this pid alive*
-    /// — `kill(pid, 0)`, `OpenProcess` — is a foreign call, and this workspace
-    /// **forbids** `unsafe_code` rather than merely denying it, so no crate in
-    /// it can make one. Shelling out to `tasklist` costs more than the connect
-    /// timeout it would save, and `/proc` is one platform of three.
+    /// Pids are reused. A pid that answers *alive* may belong to a text editor
+    /// that started after the crash, so this field can rule a sibling **out**
+    /// and can never rule one **in**. [`presence`] is still what settles it —
+    /// it asks `/health` and reads who answered — and this only saves the
+    /// asking in the case where there is provably nobody to ask.
     ///
-    /// Staleness therefore stays where it already is and already works:
-    /// [`presence`] asks `/health` and reads who answered. What is left here is
-    /// the pid in the file, which is worth having when somebody is looking at
-    /// two endpoint files wondering which window wrote which.
+    /// # Two releases of getting this wrong, in opposite directions
+    ///
+    /// It first claimed to be a staleness check — *"so a stale file can be told
+    /// from a live one before anything is sent"* — and no such telling existed.
+    /// The correction went too far the other way: it said the check could not
+    /// be written at all, because every way to ask *is this pid alive* is a
+    /// foreign call and this workspace **forbids** `unsafe_code`.
+    ///
+    /// That was true about this crate and false about the workspace. A lint
+    /// table is inherited by opting in, so the exception is a crate that does
+    /// not opt in: `girsa-alive`, three functions wide, holding every `unsafe`
+    /// block in the tree where one reviewer can see all of them at once. The
+    /// question was never unaskable — it just had no honest place to live.
     pub pid: u32,
     /// The application's own version, shown in the presence chip.
     pub version: String,
@@ -335,6 +338,22 @@ pub fn presence(app: App) -> Presence {
     let Some(endpoint) = Endpoint::read(app) else {
         return Presence::NotRunning;
     };
+    // **The one thing a pid can settle: nobody is there.**
+    //
+    // Asked before the socket, because this is the case the socket is worst at.
+    // A closed port refuses at once, but a crashed application leaves a port
+    // the operating system is free to hand to something else, and something
+    // else that accepts and does not answer costs the full `PATIENCE`. The
+    // reader gets a chip that says so immediately instead.
+    //
+    // Only `gone()` short-circuits. `Alive` and `Unknown` both fall through to
+    // the ask, because a live pid is not evidence that it is *this* application
+    // holding it — see `Endpoint::pid`.
+    if girsa_alive::alive(endpoint.pid).gone() {
+        return Presence::Stale {
+            why: format!("the {app} that wrote the endpoint file is no longer running"),
+        };
+    }
     match ask(&endpoint, "GET", "/health", None) {
         Ok(body) => match serde_json::from_str::<Health>(&body) {
             Ok(health) if health.app == app => Presence::Live {
@@ -652,23 +671,54 @@ mod tests {
         assert_eq!(presence(app), Presence::NotRunning);
     }
 
-    #[test]
-    fn an_endpoint_file_left_behind_by_a_crash_is_stale_and_says_so() {
-        let _alone = alone();
-        let app = App::Ksav;
+    /// Publish an endpoint file that nothing is listening behind.
+    fn crashed(app: App, pid: u32) {
         Endpoint {
             app,
             // Port 1 is reserved and nothing will be listening on it.
             port: 1,
             token: mint_token().expect("randomness"),
-            pid: 999_999,
+            pid,
             version: "0.0.0".into(),
         }
         .publish()
         .expect("publishes");
+    }
+
+    #[test]
+    fn an_endpoint_file_left_behind_by_a_crash_is_stale_and_says_so() {
+        let _alone = alone();
+        let app = App::Ksav;
+        // A pid that is still running — this test's own process. The pid check
+        // cannot rule it out, so the answer has to come from the socket, which
+        // is the path this asserts is still intact.
+        crashed(app, std::process::id());
 
         match presence(app) {
             Presence::Stale { why } => assert!(!why.is_empty()),
+            other => panic!("expected stale, got {other:?}"),
+        }
+        Endpoint::withdraw(app);
+    }
+
+    /// The pid earns its keep: a sibling whose process is gone is stale
+    /// *without asking the socket*, and the reason names the process.
+    ///
+    /// The two cases are asserted apart rather than together, because both are
+    /// `Stale` and a test that only checked the variant would pass with the
+    /// check ripped out. Deleting the `girsa_alive` call in `presence` leaves
+    /// this one green on the variant and red on the words.
+    #[test]
+    fn a_sibling_whose_process_is_gone_is_stale_for_that_reason() {
+        let _alone = alone();
+        let app = App::Ksav;
+        crashed(app, u32::MAX);
+
+        match presence(app) {
+            Presence::Stale { why } => assert!(
+                why.contains("no longer running"),
+                "the pid should have settled it, and said so: {why}"
+            ),
             other => panic!("expected stale, got {other:?}"),
         }
         Endpoint::withdraw(app);
