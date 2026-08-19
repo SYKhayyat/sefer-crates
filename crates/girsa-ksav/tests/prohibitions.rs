@@ -212,3 +212,42 @@ fn every_named_class_is_swept() {
         broken.join("\n  ")
     );
 }
+
+/// A document may nest as deep as it likes and the process survives it.
+///
+/// This is a prohibition rather than a unit test because the class it names is
+/// *unbounded recursion over input somebody else wrote*, and the cost of
+/// breaking it is not a wrong answer. `read` is mutually recursive — `run` →
+/// `command` → `content` → `sub` → `run` — and before `NESTING_LIMIT` nothing
+/// compared the depth to anything. `"#ציטוט["` repeated two thousand times is
+/// 26 KB of input and a stack overflow, and a stack overflow in Rust is an
+/// immediate abort: the process is gone between one instruction and the next,
+/// taking the reader's unsaved writing with it.
+///
+/// Both applications compile this crate and both reach it from a file a person
+/// did not write — Girsa when a file is dropped on the window, Ksav on its own
+/// primary input. So the depth is bounded here.
+///
+/// The numbers below bracket the reproduction: 700 survived on an 8 MB main
+/// thread before the fix and 1000 did not, and every command that reaches this
+/// runs on a blocking-pool thread with less stack than that.
+#[test]
+fn a_document_that_nests_forever_is_read_rather_than_aborting() {
+    for levels in [64, 65, 700, 2_000, 40_000] {
+        let markup = format!("{}דבר{}", "#ציטוט[".repeat(levels), "]".repeat(levels));
+        let blocks = girsa_ksav::read(&markup);
+        assert!(
+            !blocks.is_empty(),
+            "{levels} levels: a truncated reading is the right answer, and an \
+             empty one says the words were lost rather than flattened"
+        );
+    }
+}
+
+/// The same shape with nothing closing it, which is what a half-typed document
+/// looks like and is the cheaper attack: *n* levels for *n* × 7 bytes.
+#[test]
+fn a_document_that_never_closes_its_brackets_is_read_rather_than_aborting() {
+    let markup = "#ציטוט[".repeat(40_000);
+    let _ = girsa_ksav::read(&markup);
+}

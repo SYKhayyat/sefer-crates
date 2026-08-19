@@ -175,23 +175,87 @@ pub struct Cited {
 #[must_use]
 pub fn cited_in(markup: &str) -> Vec<Cited> {
     let mut out = Vec::new();
-    let mut rest = markup;
-    while let Some(at) = rest.find("מקור:") {
-        rest = &rest[at + "מקור:".len()..];
+    for at in keys_in(markup) {
+        let rest = &markup[at + KEY.len()..];
         let Some(open) = rest.find('"') else { break };
         let after = &rest[open + 1..];
         let Some(close) = after.find('"') else { break };
         let found = &after[..close];
-        rest = &after[close + 1..];
         if !found.starts_with("girsa:") {
             continue;
         }
+        let rest = &after[close + 1..];
         out.push(Cited {
             reference: found.to_string(),
             // Only up to the `]` that ends this citation: the next one's
             // argument is not this one's, and a document is a list of these.
             range: range_in(&rest[..rest.find(']').unwrap_or(rest.len())]),
         });
+    }
+    out
+}
+
+/// The named argument that carries a citation's ref.
+const KEY: &str = "מקור:";
+
+/// Where in `markup` a `מקור:` sits that is really a citation's argument, by
+/// byte offset of its first character.
+///
+/// # Why this is not `markup.find`
+///
+/// It was, and the scan had no idea whether what it found was markup of this
+/// document or *words*. `מקור:` is a named argument, so it only means anything
+/// inside a `(…)` argument list — and a quoted passage lives inside a `[…]`
+/// content body, where a sefer that happens to discuss citations, or a document
+/// quoting another document, prints those five characters as prose. Counted as
+/// a citation, such a passage made [`cited_in`] disagree with the document and
+/// made [`retargeted`] rewrite words somebody wrote, against its own promise
+/// that *a `girsa:` ref sitting in the prose … is not this function's to
+/// rewrite*.
+///
+/// So: inside parentheses, outside a string literal, and not behind a
+/// backslash. That admits the citation Ksav writes wherever it is written —
+/// including inside a footnote, which is a real citation at bracket depth one
+/// and is why the test is the parenthesis and not the bracket.
+///
+/// One scanner, for the same reason [`cited_in`] gives: two answers to *which
+/// of these is a citation* would disagree the first time either grew an
+/// argument, and this one is asked by both walks.
+fn keys_in(markup: &str) -> Vec<usize> {
+    let mut out = Vec::new();
+    let bytes = markup.as_bytes();
+    let mut parens = 0usize;
+    let mut in_string = false;
+    let mut at = 0usize;
+    while at < markup.len() {
+        // A boundary check rather than an iterator, because the walk skips a
+        // whole key when it finds one and `char_indices` cannot be told to.
+        if !markup.is_char_boundary(at) {
+            at += 1;
+            continue;
+        }
+        match bytes[at] {
+            b'\\' => {
+                // The escape covers whatever follows it, however wide.
+                at += 1;
+                while at < markup.len() && !markup.is_char_boundary(at) {
+                    at += 1;
+                }
+                at += 1;
+                continue;
+            }
+            b'"' => in_string = !in_string,
+            b'(' if !in_string => parens += 1,
+            b')' if !in_string => parens = parens.saturating_sub(1),
+            _ => {
+                if parens > 0 && !in_string && markup[at..].starts_with(KEY) {
+                    out.push(at);
+                    at += KEY.len();
+                    continue;
+                }
+            }
+        }
+        at += 1;
     }
     out
 }
@@ -217,25 +281,24 @@ pub fn cited_in(markup: &str) -> Vec<Cited> {
 /// stores and is not this function's to rewrite.
 #[must_use]
 pub fn retargeted(markup: &str, mut moved: impl FnMut(&str) -> Option<String>) -> String {
-    const KEY: &str = "מקור:";
     let mut out = String::with_capacity(markup.len());
-    // `written` is how much of `markup` is already in `out`; `base` is where
-    // `rest` begins in it. Two offsets, because the walk is over a shrinking
-    // slice and the edits are into the whole.
+    // How much of `markup` is already in `out`. The offsets from `keys_in` are
+    // into the whole document, so there is only the one of them now.
     let mut written = 0usize;
-    let mut base = 0usize;
-    let mut rest = markup;
-    while let Some(found) = rest.find(KEY) {
+    for found in keys_in(markup) {
         let after_key = found + KEY.len();
-        let tail = &rest[after_key..];
+        let tail = &markup[after_key..];
         let Some(open) = tail.find('"') else { break };
         let after_open = &tail[open + 1..];
         let Some(close) = after_open.find('"') else {
             break;
         };
         let value = &after_open[..close];
-        let start = base + after_key + open + 1;
+        let start = after_key + open + 1;
         let end = start + close;
+        if start < written {
+            continue;
+        }
         if value.starts_with("girsa:") {
             if let Some(now) = moved(value) {
                 out.push_str(&markup[written..start]);
@@ -243,8 +306,6 @@ pub fn retargeted(markup: &str, mut moved: impl FnMut(&str) -> Option<String>) -
                 written = end;
             }
         }
-        base = end + 1;
-        rest = &after_open[close + 1..];
     }
     out.push_str(&markup[written..]);
     out
@@ -385,14 +446,68 @@ pub fn refs_in(markup: &str) -> Vec<String> {
 /// compile Ksav.
 pub const MARKUP: &[char] = &['#', '[', ']', '\\', '$', '*', '_', '<', '>', '@'];
 
+/// Every character Typst reads as markup **only at the start of a line**.
+///
+/// [`MARKUP`] is the list of characters that are special wherever they appear.
+/// These four are special only in the first column, and they are the other half
+/// of the same job, because [`quote_block`] embeds corpus text into `#ציטוט[…]`
+/// **verbatim, newlines and all**. A quoted line beginning with one of them
+/// stops being a line of the quote and becomes a heading, a list item or a term
+/// — which changes the *structure* of the reader's document rather than its
+/// content, and is exactly the failure the escaper exists to prevent.
+///
+/// `=` is a heading, `-` a list item, `+` an enum item, `/` a term list. Typst
+/// wants whitespace after each of them and this escapes them regardless: a
+/// backslash before a character Typst does not read specially yields that
+/// character, so over-escaping costs nothing and under-escaping mangles a
+/// document.
+///
+/// Not on this list, and handled separately in [`escape`]: a leading run of
+/// digits followed by `.`, which is Typst's other enum syntax. A digit cannot
+/// carry a backslash — `\1` is not an escape Typst knows — so it is the dot
+/// that takes it, which is the spelling Typst's own documentation gives.
+pub const LINE_STARTS: &[char] = &['=', '-', '+', '/'];
+
 /// Escape the characters Typst reads as markup.
 ///
 /// See the module note: an unclosed `[` from an unescaped quote is reported at
 /// end of file, nowhere near the quote that caused it.
+///
+/// Two lists, because Typst has two kinds of special character: [`MARKUP`],
+/// which is special anywhere, and [`LINE_STARTS`], which is special in the
+/// first column. Corpus text arrives here with its newlines in it — see
+/// [`quote_block`] — so both kinds are reachable from one quoted passage.
 #[must_use]
 pub fn escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    // Where we are in the line. `at_line_start` stays true through spaces and
+    // tabs, because Typst reads an *indented* list item as a list item.
+    // `digits` counts the leading digits on this line, which is how the `.`
+    // that would close an enum marker is told from every other dot.
+    let mut at_line_start = true;
+    let mut digits = 0usize;
     for c in s.chars() {
+        match c {
+            '\n' => {
+                at_line_start = true;
+                digits = 0;
+            }
+            ' ' | '\t' if at_line_start => {}
+            _ => {
+                if at_line_start && LINE_STARTS.contains(&c) {
+                    out.push('\\');
+                }
+                if c.is_ascii_digit() && (at_line_start || digits > 0) {
+                    digits += 1;
+                } else {
+                    if c == '.' && digits > 0 {
+                        out.push('\\');
+                    }
+                    digits = 0;
+                }
+                at_line_start = false;
+            }
+        }
         if MARKUP.contains(&c) {
             out.push('\\');
         }
@@ -759,5 +874,72 @@ mod retargeting {
         let after = retargeted(markup, |_| Some("girsa:bavli/berakhot/2a:2".to_string()));
         assert_eq!(after.matches("2a:2").count(), 2, "{after}");
         assert!(!after.contains("2a:1"), "{after}");
+    }
+
+    #[test]
+    fn a_quoted_line_that_starts_with_a_list_marker_stays_a_line_of_the_quote() {
+        // Corpus text arrives with its newlines in it and goes into
+        // `#ציטוט[…]` verbatim. Before `LINE_STARTS`, a passage whose
+        // second line opened with `-` turned that line into a list item: the
+        // structure of somebody's document changed, which is the failure the
+        // escaper exists to prevent.
+        for marker in ["=", "-", "+", "/"] {
+            let text = format!(
+                "אחד
+{marker} שניים"
+            );
+            let out = quote_block(&text);
+            assert!(
+                out.contains(&format!("\\{marker} ")),
+                "{marker} at a line start is escaped: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_indented_marker_is_still_a_marker() {
+        // Typst reads an indented list item as a list item, so the escaper
+        // cannot stop looking at the first space.
+        let out = escape(
+            "אחד
+   - שניים",
+        );
+        assert!(out.contains(r"   \- "), "{out}");
+    }
+
+    #[test]
+    fn a_number_that_opens_a_line_does_not_open_a_list() {
+        // `1.` is Typst's other enum syntax. A digit cannot carry a backslash,
+        // so the dot takes it.
+        let out = escape("12. דבר");
+        assert!(out.starts_with(r"12\. "), "{out}");
+        // And a dot that is not closing a leading number is left alone, which
+        // is every other dot in every sefer.
+        let out = escape("דבר. ועוד 12.5");
+        assert!(!out.contains(r"\."), "{out}");
+    }
+
+    #[test]
+    fn a_citation_printed_inside_a_quote_is_words_and_not_a_citation() {
+        // A sefer that discusses Girsa citations, or a document quoting another
+        // document, prints these five characters as prose. Counting them made
+        // `cited_in` disagree with the document and made `retargeted` rewrite
+        // somebody's words.
+        let markup = quote_block("כותבים מקור: \"girsa:bavli/berakhot/2a:1\" וזהו הכלל");
+        assert!(cited_in(&markup).is_empty(), "{markup}");
+        assert_eq!(
+            retargeted(&markup, |_| Some("girsa:bavli/berakhot/99a:9".into())),
+            markup,
+            "somebody else's words are not this function's to rewrite"
+        );
+    }
+
+    #[test]
+    fn a_citation_inside_a_footnote_is_still_a_citation() {
+        // The test is the parenthesis and not the bracket, because a citation
+        // written inside a note is a real citation at bracket depth one.
+        let inner = mekor("שו\"ע", Some("girsa:bavli/berakhot/2a:1"), None);
+        let markup = format!("#הערה[וראה {inner}]");
+        assert_eq!(cited_in(&markup).len(), 1, "{markup}");
     }
 }

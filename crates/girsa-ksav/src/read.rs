@@ -289,7 +289,8 @@ fn role(name: &str) -> Role {
 ///
 /// Never fails: a document that is half-written, or that ends inside a bracket,
 /// yields the blocks it got to. This runs over files a person is in the middle
-/// of typing.
+/// of typing. Past [`NESTING_LIMIT`] levels of content commands it stops
+/// descending and reads what is left as words; see that constant for why.
 #[must_use]
 pub fn read(markup: &str) -> Vec<Block> {
     let mut reader = Reader {
@@ -299,11 +300,34 @@ pub fn read(markup: &str) -> Vec<Block> {
         out: Vec::new(),
         pending: Vec::new(),
         notes: 0,
+        nesting: 0,
     };
     let text = reader.run(None, 0);
     reader.flush(text);
     reader.out
 }
+
+/// How many content commands deep the reader will follow before it stops
+/// descending and reads the rest as words.
+///
+/// The reading is mutually recursive — `run` → `command` → `content` → `sub` →
+/// `run` — and one stack frame per level is a cost the *writer* of the document
+/// chooses. `#ציטוט[` repeated two thousand times is 26 KB of input and a stack
+/// overflow, which in Rust is an immediate abort: no unwinding, no `Result`,
+/// nothing to catch. Both applications read documents somebody else wrote —
+/// Girsa reads one when a file is dropped on the window — so the input is not
+/// trusted and the depth has to be bounded here rather than by good manners.
+///
+/// Sixty-four is generous for a document written by a person and nowhere near
+/// the ceiling of the smallest thread that runs this: every Tauri command is
+/// `async`, so the reading happens on the runtime's blocking pool rather than
+/// on the main thread's 8 MB.
+///
+/// It also bounds the copying. `content` slices the bracketed body out with
+/// `raw`, which for a document nested straight down is the whole remaining
+/// tail, and `sub` re-collects `char_indices` over it. That is quadratic in the
+/// nesting; capping the nesting caps the quadratic at sixty-four passes.
+pub const NESTING_LIMIT: u8 = 64;
 
 struct Reader<'a> {
     src: &'a [u8],
@@ -316,6 +340,13 @@ struct Reader<'a> {
     /// footnote belongs *after* the sentence that carried it and not inside it.
     pending: Vec<Block>,
     notes: usize,
+    /// How many content commands deep this reading is, which is the recursion
+    /// and not the list nesting. The `depth` threaded through `run`, `command`
+    /// and `sub` is a label that ends up on `Block::Item`; it is never compared
+    /// against anything, and a document can nest content without nesting a
+    /// single list. This is the one that bounds the stack. See
+    /// [`NESTING_LIMIT`].
+    nesting: u8,
 }
 
 impl Reader<'_> {
@@ -409,7 +440,17 @@ impl Reader<'_> {
             Role::Setting | Role::Break => {
                 if self.peek() == Some('[') {
                     self.at += 1;
-                    let _ = self.run(Some(']'), depth);
+                    // The other descent, and the only one that recurses on this
+                    // reader rather than through `sub`. Counted the same way;
+                    // past the limit the body is skipped whole, which costs
+                    // nothing here because its words are thrown away anyway.
+                    if self.nesting >= NESTING_LIMIT {
+                        let _ = self.raw(']');
+                    } else {
+                        self.nesting += 1;
+                        let _ = self.run(Some(']'), depth);
+                        self.nesting -= 1;
+                    }
                 }
                 self.flush(text);
                 String::new()
@@ -538,6 +579,14 @@ impl Reader<'_> {
     /// Used for the bodies inside `(arguments)`, which were sliced out before
     /// they could be walked — a list's items and a table's cells live there.
     fn sub(&mut self, markup: &str, depth: u8) -> (String, Vec<Block>) {
+        // The floor of the recursion. Every descent in this reader goes through
+        // here or through the one `run(Some(']'))` in `command`, so the two of
+        // them together are the whole bound. Past the limit the body is read as
+        // the words it is made of: a truncated reading of a pathological
+        // document is the right answer, and an aborted process never is.
+        if self.nesting >= NESTING_LIMIT {
+            return (tidy(markup), Vec::new());
+        }
         let mut inner = Reader {
             src: markup.as_bytes(),
             chars: markup.char_indices().collect(),
@@ -545,6 +594,7 @@ impl Reader<'_> {
             out: Vec::new(),
             pending: Vec::new(),
             notes: self.notes,
+            nesting: self.nesting + 1,
         };
         let trailing = inner.run(None, depth);
         inner.notes_out();

@@ -64,6 +64,8 @@ pub mod desk;
 mod link;
 pub use link::{deep_link, Errand};
 
+pub mod routes;
+
 /// The header every request carries its token in.
 pub const TOKEN_HEADER: &str = "X-Girsa-Token";
 
@@ -132,7 +134,27 @@ pub struct Endpoint {
     pub port: u16,
     /// Minted per run. See the module note for why it exists on localhost.
     pub token: String,
-    /// So a stale file can be told from a live one before anything is sent.
+    /// Which process wrote this file. **For a person reading it, not for the
+    /// code reading it** — nothing here asks the operating system whether that
+    /// process is still alive, and this field is not a staleness check.
+    ///
+    /// It used to say it was one. It said *"so a stale file can be told from a
+    /// live one before anything is sent"*, and no such telling existed: `send`
+    /// goes straight to `TcpStream::connect_timeout`, which is why a stale
+    /// endpoint costs a timeout rather than a question. A documented mechanism
+    /// that is not there is worse than an absent one, because the next reader
+    /// trusts it.
+    ///
+    /// It cannot become one here, either. Every way to ask *is this pid alive*
+    /// — `kill(pid, 0)`, `OpenProcess` — is a foreign call, and this workspace
+    /// **forbids** `unsafe_code` rather than merely denying it, so no crate in
+    /// it can make one. Shelling out to `tasklist` costs more than the connect
+    /// timeout it would save, and `/proc` is one platform of three.
+    ///
+    /// Staleness therefore stays where it already is and already works:
+    /// [`presence`] asks `/health` and reads who answered. What is left here is
+    /// the pid in the file, which is worth having when somebody is looking at
+    /// two endpoint files wondering which window wrote which.
     pub pid: u32,
     /// The application's own version, shown in the presence chip.
     pub version: String,
