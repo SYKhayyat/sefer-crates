@@ -92,9 +92,62 @@ pub fn resolve(lexicon: &Lexicon, citation: &str) -> Resolution {
     resolve_in_context(lexicon, citation, &Context::default())
 }
 
+/// Which of the two readings of a level word this pass is taking.
+///
+/// A level word followed by a number is read as a **label** — `סימן א'` is
+/// siman one, and the word carries no address of its own. That is right almost
+/// always, and there is one population where it is wrong: a work whose schema
+/// names a section by exactly that word. `עטרת זקנים` has a section called
+/// `שער`, so `עטרת זקנים שער א'` is its first paragraph — and read as a label
+/// it is perek א' of the body instead, which is a real place and the wrong one.
+///
+/// Nothing here can tell those apart, because telling them apart needs the
+/// schema and this crate has never had one. So both readings are available and
+/// **the caller that holds the schema chooses**: see
+/// [`resolve_labels_as_names`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    /// A level word before a number is a label, and is dropped. The reading
+    /// every caller has always had.
+    Labelled,
+    /// A level word is part of the name of a section, wherever it stands.
+    Named,
+}
+
 /// Resolve a citation, completing a partial one against where the reader is.
 #[must_use]
 pub fn resolve_in_context(lexicon: &Lexicon, citation: &str, context: &Context) -> Resolution {
+    resolve_reading(lexicon, citation, context, Reading::Labelled)
+}
+
+/// The same citation, read as though every level word were part of a name.
+///
+/// **A second opinion for a caller that has the schema**, and nothing else. It
+/// is not a better reading and it must not be preferred blindly: on
+/// `שו"ע או"ח סימן א'` it says `סימן` names a section, which no schema will
+/// match — so a caller that checks its answer against a schema gets nothing
+/// back and keeps the ordinary reading.
+///
+/// It exists because the ordinary reading is **lossy**. The label word is gone
+/// from the address by the time anybody holding a schema sees it, so
+/// `girsa_corpus::sections` cannot ask *is `שער` a section of this sefer* — it
+/// has nothing left to ask about. Measured on Girsa's shelf: 166 chalakim of
+/// 7,627 land somewhere real and wrong for want of that word.
+///
+/// The rule the caller applies is the schema's and not a guess: take this
+/// reading when the word is **not** one of the level names this work's schema
+/// uses, and **is** the title of one of its sections.
+#[must_use]
+pub fn resolve_labels_as_names(lexicon: &Lexicon, citation: &str, context: &Context) -> Resolution {
+    resolve_reading(lexicon, citation, context, Reading::Named)
+}
+
+fn resolve_reading(
+    lexicon: &Lexicon,
+    citation: &str,
+    context: &Context,
+    reading: Reading,
+) -> Resolution {
     let citation = citation.trim();
     if citation.is_empty() {
         return Resolution::Unresolved;
@@ -125,7 +178,7 @@ pub fn resolve_in_context(lexicon: &Lexicon, citation: &str, context: &Context) 
         let span = if rest.trim().is_empty() {
             None
         } else {
-            match parse_span(&rest) {
+            match parse_span(&rest, reading) {
                 Some(s) => Some(s),
                 // Text after the title that is not an address. Falling back to
                 // a ref for the whole sefer would silently drop it and open the
@@ -157,7 +210,7 @@ pub fn resolve_in_context(lexicon: &Lexicon, citation: &str, context: &Context) 
     // No title at all. If the reader is standing in a sefer, a bare address is
     // a citation into it — "see se'if 5".
     if let (Some(work), Some(here)) = (&context.work, &context.address) {
-        if let Some((partial, _)) = parse_span(citation) {
+        if let Some((partial, _)) = parse_span(citation, reading) {
             return Resolution::Exact(Ref::point(work.clone(), partial.completed_against(here)));
         }
     }
@@ -171,7 +224,7 @@ pub fn resolve_in_context(lexicon: &Lexicon, citation: &str, context: &Context) 
 /// of them — Sefaria's link CSVs address whole sedras this way. A quote is a
 /// range (spec.md §4.2), so a resolver that only reads points cannot express
 /// half of what it is handed.
-fn parse_span(rest: &str) -> Option<(Address, Option<Address>)> {
+fn parse_span(rest: &str, reading: Reading) -> Option<(Address, Option<Address>)> {
     // A hyphen is a range separator *only if the side after it is addressed
     // entirely by number*. It is also an ordinary character in a section name —
     // `שער חמישי - שער ייחוד המעשה`, `כסלו-טבת` — and splitting those tears a
@@ -186,7 +239,10 @@ fn parse_span(rest: &str) -> Option<(Address, Option<Address>)> {
     // that way. What is never named is the closing end.
     for (at, _) in rest.match_indices('-') {
         let (from, to) = rest.split_at(at);
-        let (Some(from), Some(to)) = (parse_address(from), numbered_address(&to[1..])) else {
+        let (Some(from), Some(to)) = (
+            parse_address(from, reading),
+            numbered_address(&to[1..], reading),
+        ) else {
             continue;
         };
         return Some(if from == to {
@@ -195,12 +251,12 @@ fn parse_span(rest: &str) -> Option<(Address, Option<Address>)> {
             (from, Some(to))
         });
     }
-    Some((parse_address(rest)?, None))
+    Some((parse_address(rest, reading)?, None))
 }
 
 /// An address read from a citation, every level of which is a number or a daf.
-fn numbered_address(rest: &str) -> Option<Address> {
-    let address = parse_address(rest)?;
+fn numbered_address(rest: &str, reading: Reading) -> Option<Address> {
+    let address = parse_address(rest, reading)?;
     address
         .levels()
         .iter()
@@ -338,7 +394,7 @@ fn is_numbered(token: &str) -> bool {
 }
 
 /// Read whatever address is left after the title has been taken off.
-fn parse_address(rest: &str) -> Option<Address> {
+fn parse_address(rest: &str, reading: Reading) -> Option<Address> {
     let mut levels: Vec<Level> = Vec::new();
     // A section name is usually several words — `שער ייחוד המעשה` is one
     // level, not three. Words accumulate here and become a single level when a
@@ -386,9 +442,20 @@ fn parse_address(rest: &str) -> Option<Address> {
         let is_label = SECTION_WORD_SET.contains(bare)
             || (had_geresh && SECTION_ABBREVIATIONS.contains(&bare));
         if is_label {
-            match tokens.get(nth + 1).map(|next| is_numbered(next.trim())) {
+            // Under `Reading::Named` a level word is never a label — that is
+            // the whole of the second reading, and it is one line because the
+            // branch below already knows how to treat one as the head of a
+            // name.
+            let labels = matches!(reading, Reading::Labelled);
+            match tokens
+                .get(nth + 1)
+                .map(|next| is_numbered(next.trim()) && labels)
+            {
                 // A label with a number after it. What it always was.
-                Some(true) | None => continue,
+                Some(true) => continue,
+                // Nothing after it at all: a trailing level word names nothing
+                // and addresses nothing, under either reading.
+                None => continue,
                 // A label with a *word* after it, which is the case this is
                 // about: it is the head of a name and not a label at all.
                 //
@@ -458,8 +525,20 @@ fn parse_address(rest: &str) -> Option<Address> {
     // A name with nothing numbered after it is not a section — it is a word the
     // title match did not eat. `ברכות שבת` ends here, and reading the `שבת` as
     // a section would invent a place the reader never asked for.
+    //
+    // **Under `Reading::Named` it is kept**, and that is not a softening of the
+    // rule: the rule is *this crate cannot tell a section from a stray word*,
+    // and the second reading exists for a caller who can, because it holds the
+    // schema. `שיג ושיח; מהדורה עברית אודות המחבר` names a section and no
+    // number, and there are 56 chalakim on Girsa's shelf addressed that way
+    // with nothing numbered anywhere in them. A caller that checks the name
+    // against the schema and drops it when it does not match is asking a
+    // question this reading can answer; nobody else may use it.
     if !pending_name.is_empty() {
-        return None;
+        if matches!(reading, Reading::Labelled) {
+            return None;
+        }
+        flush_name!();
     }
 
     (!levels.is_empty()).then(|| Address::new(levels))
@@ -605,6 +684,51 @@ mod tests {
             resolved("רמב\"ם הל' תפילה פ\"ד ה\"א"),
             "girsa:mishneh-torah/tefilah/4:1"
         );
+    }
+
+    #[test]
+    fn the_second_reading_keeps_the_level_word_and_the_ordinary_one_does_not() {
+        // `שער` is a level word, so `שער א'` is gate one and the word is
+        // dropped — right almost everywhere, and wrong in a sefer whose schema
+        // calls a section `שער`. This crate cannot tell those apart, because
+        // telling them apart needs the schema. So the caller that has one can
+        // ask for the other reading.
+        //
+        // Measured on Girsa's shelf before this existed: **166 of 7,627
+        // chalakim** landed on a real place that was the wrong place, and the
+        // word that would have said so was gone before anything with a schema
+        // saw the address.
+        let named = |citation: &str| match resolve_labels_as_names(
+            &lexicon(),
+            citation,
+            &Context::default(),
+        ) {
+            Resolution::Exact(r) => r.to_string(),
+            Resolution::Ambiguous(rs) => format!("AMBIGUOUS({})", rs.len()),
+            Resolution::Unresolved => "UNRESOLVED".into(),
+        };
+
+        assert_eq!(resolved("ברכות שער א'"), "girsa:bavli/berakhot/1");
+        assert_eq!(named("ברכות שער א'"), "girsa:bavli/berakhot/שער:1");
+
+        // **The ordinary reading is untouched**, which is the whole safety of
+        // this: a second function, and not a change to the one every caller
+        // already has.
+        assert_eq!(
+            resolved("שו\"ע או\"ח סימן קכ\"א סעיף ג'"),
+            "girsa:shulchan-arukh/orach-chayim/121:3"
+        );
+        // And the second reading of that same citation is nonsense, on purpose
+        // and visibly: no schema has a section called `סימן`, so a caller that
+        // checks its answer against one keeps the reading above.
+        assert_eq!(
+            named("שו\"ע או\"ח סימן קכ\"א סעיף ג'"),
+            "girsa:shulchan-arukh/orach-chayim/סימן:121:סעיף:3"
+        );
+
+        // A trailing level word addresses nothing under either reading — there
+        // is no number for it to label and no name for it to be the head of.
+        assert_eq!(named("ברכות ב. שורה"), resolved("ברכות ב. שורה"));
     }
 
     #[test]
