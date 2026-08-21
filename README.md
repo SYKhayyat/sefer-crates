@@ -12,6 +12,27 @@ This repository is the contract. It is for anyone working on Girsa or Ksav who
 needs to change something that crosses between them, and for anyone who wants to
 understand how the two apps stay in sync without being one codebase.
 
+## Quick start
+
+```sh
+git clone https://github.com/SYKhayyat/sefer-crates
+cd sefer-crates
+cargo test
+```
+
+That is the whole setup. The pinned toolchain in
+[`rust-toolchain.toml`](rust-toolchain.toml) installs itself on first build; you
+need `rustup` and nothing else. Sibling checkouts of Girsa and Ksav are needed
+only for the cross-repo check described below.
+
+## Documentation
+
+| | |
+|---|---|
+| [docs/ONBOARDING.md](docs/ONBOARDING.md) | Start here if you are new. What each crate owns, the rules the linter enforces, the change loop, the three-repository layout, and how to cut a release. |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) | Symptom-first. Build failures, denied lints, every message `check-dependents.sh` can print, pin drift, and the CI-versus-desk differences. |
+| [CHANGELOG.md](CHANGELOG.md) | Release history, and the best record of *why* things are the way they are. |
+
 ## The crates
 
 | Crate | Purpose |
@@ -27,6 +48,10 @@ understand how the two apps stay in sync without being one codebase.
 `unsafe_code` is **forbidden** workspace-wide. `girsa-alive` is the sole
 exception — asking whether a process is alive has no safe spelling — and every
 `unsafe` block in the workspace is contained in its `lib.rs`.
+
+Panicking paths (`unwrap`, `expect`) are denied in library code and allowed only
+in tests: a wrong ref is worse than no ref, so a resolver returns an ambiguity
+rather than panicking.
 
 ## Why a separate repository, and how the cost is paid
 
@@ -47,7 +72,9 @@ and none of them are optional:
 
 Every crate shares one version (`workspace.package.version` in the root
 `Cargo.toml`) and is bumped as a single unit. See [CHANGELOG.md](CHANGELOG.md)
-for the release history.
+for the release history, and
+[docs/ONBOARDING.md](docs/ONBOARDING.md#8-cutting-a-release) for the bump
+checklist.
 
 ## Requirements
 
@@ -67,9 +94,9 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt -- --check
 ```
 
-`cargo test` exercises each crate on its own. Panicking paths (`unwrap`,
-`expect`) are denied in library code and allowed only in tests: a wrong ref is
-worse than no ref, so a resolver returns an ambiguity rather than panicking.
+These four commands are exactly what the `crates` CI job runs. If they pass at
+your desk, that job passes. `cargo test` covers unit, integration and doc tests
+— the runnable examples in the `//!` headers are tests, not decoration.
 
 ## The cross-repo check
 
@@ -86,6 +113,13 @@ red here, before the change can reach either of them.
 The script installs a `paths` override to point each dependent at this working
 tree, asserts (via `cargo metadata`) that the override actually took, and removes
 it on exit, including on Ctrl-C.
+
+It also checks three things that are not compilers: that the seven exact version
+pins still match the workspace version, that no crate's doc comment claims to be
+"compiled into both applications" while one manifest does not name it, and that
+the Source Packet still matches the fixture Ksav asserts against. Each message
+it can print is listed in
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#the-cross-repo-check).
 
 ## Developing across the three repositories
 
@@ -109,6 +143,10 @@ The two apps depend on these crates differently, by design:
   `cargo metadata`. For work that spans the seam, `Ksav/.cargo/config.toml.example`
   restores the sibling-checkout layout with a `paths` override; that file explains
   why `paths` and not `[patch]`.
+
+If a change of yours appears in one app and not the other, that asymmetry is
+the reason — see
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md#the-two-applications).
 
 ## Licence
 
