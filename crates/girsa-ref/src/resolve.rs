@@ -355,6 +355,26 @@ const SECTION_WORDS: [&str; 45] = [
 static SECTION_WORD_SET: std::sync::LazyLock<std::collections::BTreeSet<String>> =
     std::sync::LazyLock::new(|| SECTION_WORDS.iter().map(|w| normalize(w)).collect());
 
+/// Does this word **label** the number after it, rather than name something?
+///
+/// `חלק`, `סימן`, `פרק` do; `ברכות` and `הרשב"א` do not. The five that a reader
+/// would expect here and will not find — `תורה`, `תלמוד`, `ספר`, `תפילה`,
+/// `מדרש` — are absent on purpose, and [`SECTION_WORDS`] says why.
+///
+/// **Public so that nobody writes the list down twice.** A caller outside this
+/// crate reading citations out of a file has to make the same distinction, and
+/// the comment on [`SECTION_WORD_SET`] is the record of what a second, drifting
+/// copy of this list costs: `סעיף` fell through to the numeral reader, became
+/// 220, and `שוע אוח סימן א סעיף א` resolved to four levels that were all
+/// wrong. A copy in another repository is that bug with a longer fuse.
+///
+/// The comparison is the normalized one, so a final letter, a geresh or nikud
+/// do not make it a different word.
+#[must_use]
+pub fn is_section_word(word: &str) -> bool {
+    SECTION_WORD_SET.contains(&normalize(word))
+}
+
 /// Abbreviated labels, recognised **only when the token carries a geresh**.
 ///
 /// `סי'` is siman and `פ'` is perek. Bare, they are the numbers 60 and 80, and
