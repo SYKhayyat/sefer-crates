@@ -1,0 +1,5 @@
+number,title,url,D,R,why,risk
+1,[Low/bug] Address::parse silently drops empty levels,https://github.com/SYKhayyat/sefer-crates/issues/1,1,4,Reject empty parts; seif promoted to siman silently,Silent mis-rank
+2,[Low/bug] Lexicon keeps first-seen titles per slug,https://github.com/SYKhayyat/sefer-crates/issues/2,1,4,Prefer canonical row; short variant silently becomes title,Silent wrong title
+3,[Low/bug] cite daf spacing relies on fragile suffix check,https://github.com/SYKhayyat/sefer-crates/issues/3,1,3,Typed is_daf flag; wrong branch mis-spaces cite visibly,Visible mis-space
+4,[Low/bug] Resolution dedups only adjacent entries,https://github.com/SYKhayyat/sefer-crates/issues/4,1,3,Sort+dedup; duplicate refs listed twice visibly,Visible duplicates
